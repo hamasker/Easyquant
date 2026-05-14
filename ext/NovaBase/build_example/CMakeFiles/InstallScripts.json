@@ -1,0 +1,9 @@
+{
+	"InstallScripts" : 
+	[
+		"/Users/baser/Working/MX/Relaxquant_MX/ext/NovaBase/build_example/cmake_install.cmake",
+		"/Users/baser/Working/MX/Relaxquant_MX/ext/NovaBase/build_example/src/cmake_install.cmake",
+		"/Users/baser/Working/MX/Relaxquant_MX/ext/NovaBase/build_example/src/nvws/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

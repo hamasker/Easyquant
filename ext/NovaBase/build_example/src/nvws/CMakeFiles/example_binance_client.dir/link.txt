@@ -1,0 +1,1 @@
+/usr/bin/g++ -g -Wl,-search_paths_first -Wl,-headerpad_max_install_names CMakeFiles/example_binance_client.dir/example_binance_client.cpp.o -o ../../bin/example_binance_client  ../../bin/libnvws.a /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib/libz.tbd /opt/homebrew/lib/libssl.dylib /opt/homebrew/lib/libcrypto.dylib -lpthread

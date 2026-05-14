@@ -1,0 +1,125 @@
+USDT:
+  Balance: 566500
+  Price: 0.0
+  Flag: True
+  Precision: 0
+USDC:
+  Balance: 137500
+  Price: 0.0
+  Flag: True
+  Precision: 0
+USD:
+  Balance: 1265000
+  Price: 1.0
+  Flag: True
+  Precision: 0
+EUR:
+  Balance: 721649.5
+  Price: 0.0
+  Flag: True
+  Precision: 0
+GBP:
+  Balance: 226797.59
+  Price: 0.0
+  Flag: True
+  Precision: 0
+CHF:
+  Balance: 49775
+  Price: 0.0
+  Flag: False
+  Precision: 0
+CAD:
+  Balance: 60254
+  Price: 0.0
+  Flag: False
+  Precision: 0
+AUD:
+  Balance: 86418
+  Price: 0.0
+  Flag: False
+  Precision: 0
+PAXG:
+  Balance: 5.5
+  Price: 0.0
+  Flag: False
+  Precision: 2
+ADA:
+  Balance: 317796
+  Price: 0.0
+  Flag: False
+  Precision: 0
+ALGO:
+  Balance: 27988
+  Price: 0.0
+  Flag: False
+  Precision: 0
+ATOM:
+  Balance: 2565.2
+  Price: 0.0
+  Flag: False
+  Precision: 1
+AVAX:
+  Balance: 391.6
+  Price: 0.0
+  Flag: False
+  Precision: 1
+BTC:
+  Balance: 13.145
+  Price: 0.0
+  Flag: True
+  Precision: 5
+DOGE:
+  Balance: 1113872
+  Price: 0.0
+  Flag: False
+  Precision: 0
+DOT:
+  Balance: 8457.2
+  Price: 0.0
+  Flag: False
+  Precision: 1
+ETH:
+  Balance: 201.3
+  Price: 0.0
+  Flag: True
+  Precision: 4
+LINK:
+  Balance: 10576.92
+  Price: 0.0
+  Flag: False
+  Precision: 2
+LTC:
+  Balance: 1108.8
+  Price: 0.0
+  Flag: False
+  Precision: 1
+MATIC:
+  Balance: 82346
+  Price: 0.0
+  Flag: False
+  Precision: 0
+PENGU:
+  Balance: 1263897
+  Price: 0.0
+  Flag: False
+  Precision: 0
+SHIB:
+  Balance: 378449612
+  Price: 0.0
+  Flag: False
+  Precision: 0
+SOL:
+  Balance: 4824.6
+  Price: 0.0
+  Flag: True
+  Precision: 2
+TRUMP:
+  Balance: 735.87
+  Price: 0.0
+  Flag: False
+  Precision: 2
+XRP:
+  Balance: 228040.4
+  Price: 0.0
+  Flag: True
+  Precision: 0

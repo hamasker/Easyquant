@@ -1,0 +1,5 @@
+ABBR_MAP("10000000aidoge_usdt_swap.bybit", "1e7aidoge_usdt_swap.bybit")
+ABBR_MAP("1000000babydoge_usdt_swap.bybit", "1e6babydoge_usdt_swap.bybit")
+ABBR_MAP("1000000peipei_usdt_swap.bybit", "1e6peipei_usdt_swap.bybit")
+ABBR_MAP("1000neirocto_usdt_swap.bybit", "1e3neirocto_usdt_swap.bybit")
+ABBR_MAP("1000000cheems_usdt_swap.bybit", "1e6cheems_usdt_swap.bybit")

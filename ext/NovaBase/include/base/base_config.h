@@ -1,0 +1,242 @@
+#pragma once
+
+#include <fstream>
+#include <type_traits>
+
+#include "base/base_util.h"
+
+#include "base/picojson.h"
+
+#define CONFIG_SERVER "Server"
+
+#define CONFIG_LOG "Server.Log"
+#define CONFIG_PATH ".Path"
+#define CONFIG_FILE_LEVEL ".file_level"
+#define CONFIG_SCREEN_LEVEL ".screen_level"
+#define CONFIG_ASYNC_LOG ".async_log"
+#define CONFIG_LOCAL_TIME ".local_time"
+#define CONFIG_ROTATING ".rotating"
+
+#define CONFIG_MEMORY_BLOCK_POOL ".MemoryBlockPool"
+#define CONFIG_DAEMON ".daemon"
+
+BEGIN_NOVA_NAMESPACE(base)
+
+// ✅ 安全获取 json[key]，支持多级路径如 "Server.Log.path"
+inline const picojson::value &JsonGetItemValue(const picojson::value &value,
+                                               const char *key) {
+  static picojson::value null_val;
+  if (!value.is<picojson::object>())
+    return null_val;
+
+  std::string path(key);
+  const picojson::value *cur = &value;
+  size_t start = 0, end;
+
+  while (start < path.size()) {
+    end = path.find('.', start);
+    std::string current_key = (end == std::string::npos)
+                                  ? path.substr(start)
+                                  : path.substr(start, end - start);
+
+    if (!cur->is<picojson::object>())
+      return null_val;
+    const auto &obj = cur->get<picojson::object>();
+    auto it = obj.find(current_key);
+    if (it == obj.end())
+      return null_val;
+    cur = &it->second;
+    if (end == std::string::npos)
+      break;
+    start = end + 1;
+  }
+  return *cur;
+}
+
+class Config {
+public:
+  static constexpr auto DEFAULT_CONFIG_PATH = "./nova_config.json";
+
+  enum CONFIG_SOURCE {
+    CONFIG_SOURCE_INIT,
+    CONFIG_SOURCE_JSON_FILE,
+    CONFIG_SOURCE_COMMAND,
+    CONFIG_SOURCE_SERVICE_NACOS,
+    CONFIG_SOURCE_UNKNOWN
+  };
+
+  Config() = default;
+  virtual ~Config() = default;
+  Config(const picojson::value &v)
+      : cfg_root_(v), config_source_(CONFIG_SOURCE_INIT) {}
+
+  // === 加载 ===
+  inline bool Load(const char *file_name = DEFAULT_CONFIG_PATH);
+  inline bool Load(const std::string &file_name);
+  inline bool Parse(const char *msg);
+  inline bool Contains(const char *key) const;
+  inline bool Contains(const std::string &key) const {
+    return Contains(key.c_str());
+  }
+
+private:
+  template <
+      typename T, bool = std::is_integral<T>::value,
+      bool =
+          std::is_same<typename std::remove_volatile<T>::type, int64_t>::value,
+      bool = std::is_same<typename std::remove_volatile<T>::type, bool>::value>
+  struct Helper {
+    static bool Get(const picojson::value &cfg_root_, const char *key,
+                    T &value) {
+      auto &ret = JsonGetItemValue(cfg_root_, key); // 修改为支持多级路径
+      if (ret.is<picojson::null>())
+        return false;
+      using nvT = typename std::remove_volatile<T>::type;
+      if (!ret.is<nvT>()) {
+        fprintf(stderr, "json object type doesn't match[key:%s]\n", key);
+        return false;
+      }
+      value = ret.get<nvT>();
+      return true;
+    }
+  };
+
+  template <typename T> struct Helper<T, true, false, false> {
+    static bool Get(const picojson::value &cfg_root_, const char *key,
+                    T &value) {
+      int64_t tmp;
+      if (Helper<int64_t>::Get(cfg_root_, key, tmp) == true) {
+        value = tmp;
+        return true;
+      }
+      return false;
+    }
+  };
+
+public:
+  template <class T>
+  requires (!std::same_as<T, picojson::value>) static bool Cast(
+      T &out, const picojson::value &v) {
+    using OT =
+        std::conditional_t<std::is_integral_v<T> and !std::is_same_v<T, bool>,
+                           int64_t, T>;
+
+    if (!v.is<OT>()) {
+      return false;
+    }
+    out = v.get<OT>();
+    return true;
+  }
+
+  template <class T> bool GetItemValue(const char *key, T &value) const {
+    return Helper<T>::Get(cfg_root_, key, value);
+  }
+
+  bool GetItemValue(const char *key, const char *&value) const {
+    auto &ret = JsonGetItemValue(cfg_root_, key);
+    if (ret.is<picojson::null>())
+      return false;
+    if (!ret.is<std::string>())
+      return false;
+    value = ret.get<std::string>().c_str();
+    return true;
+  }
+
+  bool GetItemValue(const char *key, picojson::value &value) const {
+    auto &ret = JsonGetItemValue(cfg_root_, key);
+    if (ret.is<picojson::null>())
+      return false;
+    value = ret;
+    return true;
+  }
+
+  template <class T> bool GetItemValue(const std::string &key, T &value) const {
+    return GetItemValue(key.c_str(), value);
+  }
+
+  template <class T>
+  requires(!std::same_as<T, picojson::value>) bool GetItemValue(
+      const char *key, std::vector<T> &value) const {
+    picojson::array ary;
+    if (!GetItemValue(key, ary)) {
+      return false;
+    }
+
+    std::vector<T> ret;
+    for (auto &o : ary) {
+      T t;
+      if (!Cast(t, o))
+        return false;
+      ret.push_back(t);
+    }
+
+    value = std::move(ret);
+    return true;
+  }
+
+  template <class T>
+  requires(!std::same_as<T, picojson::value>) bool GetItemValue(
+      const char *key, std::map<std::string, T> &value) const {
+    picojson::object ary;
+    if (!GetItemValue(key, ary)) {
+      return false;
+    }
+    std::map<std::string, T> ret;
+    for (auto &o : ary) {
+      T t;
+      if (!Cast(t, o.second))
+        return false;
+      ret[o.first] = t;
+    }
+    value = std::move(ret);
+    return true;
+  }
+
+  static int GetOpt(int argc, char **argv, const char *opts);
+
+  const std::string &config_file() const { return config_file_; }
+  void set_config_file(const std::string &c) { config_file_ = c; }
+
+  CONFIG_SOURCE config_source() const { return config_source_; }
+  void set_config_source(CONFIG_SOURCE cs) { config_source_ = cs; }
+
+  picojson::value json() const { return cfg_root_; }
+
+private:
+  picojson::value cfg_root_;
+  std::string config_file_;
+  CONFIG_SOURCE config_source_;
+};
+END_NOVA_NAMESPACE(base)
+
+// === inline 实现 ===
+inline bool Config::Load(const char *file_name) {
+  std::ifstream ifs(file_name);
+  if (!ifs.is_open()) {
+    std::cerr << "无法打开配置文件: " << file_name << std::endl;
+    return false;
+  }
+  std::stringstream ss;
+  ss << ifs.rdbuf();
+  config_file_ = file_name;
+  config_source_ = CONFIG_SOURCE_JSON_FILE;
+  return Parse(ss.str().c_str());
+}
+
+inline bool Config::Load(const std::string &file_name) {
+  return Load(file_name.c_str());
+}
+
+inline bool Config::Parse(const char *msg) {
+  std::string err = picojson::parse(cfg_root_, msg);
+  if (!err.empty()) {
+    std::cerr << "JSON 解析失败: " << err << std::endl;
+    return false;
+  }
+  return true;
+}
+
+inline bool Config::Contains(const char *key) const {
+  const auto &ret = JsonGetItemValue(cfg_root_, key);
+  return !ret.is<picojson::null>();
+}

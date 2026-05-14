@@ -1,0 +1,7 @@
+#pragma once
+
+#define NOVA_VERSION "2.17.1.1"
+#define NOVA_VERSION_MAJOR 2
+#define NOVA_VERSION_MINOR 17
+#define NOVA_VERSION_PATCH1 1
+#define NOVA_VERSION_PATCH2 1

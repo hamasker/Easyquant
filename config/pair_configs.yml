@@ -1,0 +1,121 @@
+# 每个 pair 的配置，ema_alpha 为其中一个 key，后续可扩展更多 key
+# 未列出的 pair 使用 default 中的配置
+# thr_bid_bps/thr_ask_bps: s_bps 下单闸门阈值(bps)，每日从本文件重载
+# s_bps/depth5 汇总分位数(0~100)，bid/ask 各自独立，按 pair 读取
+# fp_momentum_scale: FP 动量缩放，0=关闭；>0 时用 fp_mid 的 bar 间变化平移 bid/ask（forex/digital 实盘）
+default:
+  ema_alpha: 1.0
+  thr_bid_bps: 0.0
+  thr_ask_bps: 0.0
+  s_bps_summary_percentile_bid: 50.0
+  s_bps_summary_percentile_ask: 50.0
+  depth5_summary_percentile_bid: 50.0
+  depth5_summary_percentile_ask: 50.0
+  wp_invalid_ticks: 0
+  fp_momentum_scale: 0.0
+
+# 示例：为不同 pair 配置（thr_bid_bps/thr_ask_bps 按 pair 区分，未写则用 default）
+usdt_usd_spot.krk:
+  ema_alpha: 1.0
+  thr_bid_bps: 0.0
+  thr_ask_bps: 0.0
+usdt_eur_spot.krk:
+  ema_alpha: 0.8
+  thr_bid_bps: 0.0
+  thr_ask_bps: 0.0
+eur_usd_spot.krk:
+  ema_alpha: 0.8
+  thr_bid_bps: 0.0
+  thr_ask_bps: 0.0
+usdc_eur_spot.krk:
+  ema_alpha: 0.8
+  thr_bid_bps: 0.0
+  thr_ask_bps: 0.0
+usdc_usd_spot.krk:
+  ema_alpha: 1.0
+  thr_bid_bps: 0.0
+  thr_ask_bps: 0.0
+usdc_usdt_spot.krk:
+  ema_alpha: 1.0
+  thr_bid_bps: 0.0
+  thr_ask_bps: 0.0
+gbp_usd_spot.krk:
+  ema_alpha: 0.1
+  thr_bid_bps: 0.0
+  thr_ask_bps: 0.0
+usdt_gbp_spot.krk:
+  ema_alpha: 0.1
+  thr_bid_bps: 0.0
+  thr_ask_bps: 0.0
+usdc_gbp_spot.krk:
+  ema_alpha: 0.1
+  thr_bid_bps: 0.0
+  thr_ask_bps: 0.0
+btc_usd_spot.krk:
+  ema_alpha: 1.0
+  thr_bid_bps: 0.0
+  thr_ask_bps: 0.0
+btc_eur_spot.krk:
+  ema_alpha: 1.0
+  thr_bid_bps: 0.0
+  thr_ask_bps: 0.0
+btc_gbp_spot.krk:
+  ema_alpha: 1.0
+  thr_bid_bps: 0.0
+  thr_ask_bps: 0.0
+btc_usdc_spot.krk:
+  ema_alpha: 1.0
+  thr_bid_bps: 0.0
+  thr_ask_bps: 0.0
+btc_usdt_spot.krk:
+  ema_alpha: 1.0
+  thr_bid_bps: 0.0
+  thr_ask_bps: 0.0
+eth_usd_spot.krk:
+  ema_alpha: 1.0
+  thr_bid_bps: 0.0
+  thr_ask_bps: 0.0
+eth_eur_spot.krk:
+  ema_alpha: 1.0
+  thr_bid_bps: 0.0
+  thr_ask_bps: 0.0
+eth_gbp_spot.krk:
+  ema_alpha: 1.0
+  thr_bid_bps: 0.0
+  thr_ask_bps: 0.0
+eth_usdt_spot.krk:
+  ema_alpha: 1.0
+  thr_bid_bps: 0.0
+  thr_ask_bps: 0.0
+sol_usd_spot.krk:
+  ema_alpha: 1.0
+  thr_bid_bps: 0.0
+  thr_ask_bps: 0.0
+sol_eur_spot.krk:
+  ema_alpha: 1.0
+  thr_bid_bps: 0.0
+  thr_ask_bps: 0.0
+sol_gbp_spot.krk:
+  ema_alpha: 1.0
+  thr_bid_bps: 0.0
+  thr_ask_bps: 0.0
+sol_usdt_spot.krk:
+  ema_alpha: 1.0
+  thr_bid_bps: 0.0
+  thr_ask_bps: 0.0
+xrp_usd_spot.krk:
+  ema_alpha: 1.0
+  thr_bid_bps: 0.0
+  thr_ask_bps: 0.0
+xrp_eur_spot.krk:
+  ema_alpha: 1.0
+  thr_bid_bps: 0.0
+  thr_ask_bps: 0.0
+xrp_gbp_spot.krk:
+  ema_alpha: 1.0
+  thr_bid_bps: 0.0
+  thr_ask_bps: 0.0
+xrp_usdt_spot.krk:
+  ema_alpha: 1.0
+  thr_bid_bps: 0.0
+  thr_ask_bps: 0.0

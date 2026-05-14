@@ -1,0 +1,2 @@
+/usr/bin/ar qc ../../bin/libnvws.a CMakeFiles/nvws.dir/ws_util.cpp.o CMakeFiles/nvws.dir/ws_thread_pool.cpp.o CMakeFiles/nvws.dir/ws_websocket_client.cpp.o CMakeFiles/nvws.dir/ws_websocket_server.cpp.o CMakeFiles/nvws.dir/ws_web_client.cpp.o CMakeFiles/nvws.dir/ws_web_server.cpp.o
+/usr/bin/ranlib ../../bin/libnvws.a
