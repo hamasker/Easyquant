@@ -2,12 +2,12 @@
 #define DATA_PROCESS_H
 
 #include "common/data.h"
-#include "configs/strategy_config.h"
-#include "data_currency.h"
+#include "configs/configs.h"
 #include <condition_variable>
 
 // 前向声明
-struct StrategyConfig;
+struct Configs;
+
 namespace DataProcess {
 using Depth = NovaCoinDepth;
 using DepthLVN = NovaCoinDepthLVN;
@@ -20,8 +20,7 @@ bool is_main_exchange(const std::string &inst_str,
                       const std::string &aim_exchange);
 
 // 获取交易所的手续费
-double get_exchange_taker_fee(const StrategyConfig &CFG_,
-                              const std::string &exchange);
+double get_exchange_taker_fee(const Configs &CFG_, const std::string &exchange);
 
 // 格式化主交易所的USD交易对
 std::string format_main_exchange_usd_pair(const std::string &currency_name,
@@ -39,11 +38,10 @@ std::string format_main_exchange_cross_pair(const std::string &base_currency,
 // 数据获取和处理函数
 bool fetch_data(const nova::quote::DataInfo &one,
                 data::InstrumentData &InstData_, bool &flag_data_ready,
-                const StrategyConfig &CFG_);
+                const Configs &CFG_);
 
 void fetch_data_all(const DataInfoManager *datainfo,
-                    data::InstrumentData &InstData_,
-                    const StrategyConfig &CFG_);
+                    data::InstrumentData &InstData_, const Configs &CFG_);
 
 void extract_depth_data(
     const Depth &md, data::depths_data &dd,
@@ -107,16 +105,16 @@ std::array<double, N> trunc_depth_data(const data::depths_data &dd,
   return data;
 };
 
-std::vector<double> extract_depth_data_vec(const Depth *md,
+std::vector<double> extract_depth_data_vec(const Depth md,
                                            const data::depth_type &dtype,
                                            const int8_t &level);
 
-std::vector<double> extract_depth_data_vec(const Depth *md, const int8_t &level,
+std::vector<double> extract_depth_data_vec(const Depth md, const int8_t &level,
                                            const data::depth_type &dtype);
 
 template <int N>
 std::array<double, N> extract_depth_data_arr(const Depth md,
-                                             data::depth_type &dtype) {
+                                             const data::depth_type &dtype) {
   bool flag_qty = false;
   const NovaCoinPriceLevel *extract_data = nullptr;
   if (dtype == data::depth_type::BID || dtype == data::depth_type::BID_QUANTITY)
@@ -129,8 +127,8 @@ std::array<double, N> extract_depth_data_arr(const Depth md,
   if (sum_util::EndsWith(data::get_depth_type_name(dtype), "quantity"))
     flag_qty = true;
   std::array<double, N> data;
-  const int ob_num = (md.ob_level > 25) ? 100 : 25;
-  const int for_num = std::min(ob_num, N);
+  const int &ob_num = (md.ob_level > 25) ? 100 : 25;
+  const int &for_num = std::min(ob_num, N);
   for (int i = 0; i < for_num; ++i)
     data[i] = flag_qty ? extract_data[i].qty : extract_data[i].price;
   return data;
@@ -138,7 +136,7 @@ std::array<double, N> extract_depth_data_arr(const Depth md,
 
 template <int N>
 std::array<std::array<double, 2>, N>
-extract_depth_data_arrs(const Depth md, data::depth_type &dtype) {
+extract_depth_data_arrs(const Depth md, const data::depth_type &dtype) {
   const NovaCoinPriceLevel *extract_data = nullptr;
   if (dtype == data::depth_type::BID || dtype == data::depth_type::BID_QUANTITY)
     extract_data = md.bid;
@@ -149,8 +147,8 @@ extract_depth_data_arrs(const Depth md, data::depth_type &dtype) {
     throw std::invalid_argument("invalid depth data type!");
 
   std::array<std::array<double, 2>, N> data;
-  const int ob_num = (md.ob_level > 25) ? 100 : 25;
-  const int for_num = std::min(ob_num, N);
+  const int &ob_num = (md.ob_level > 25) ? 100 : 25;
+  const int &for_num = std::min(ob_num, N);
   for (int i = 0; i < for_num; ++i) {
     data[i][0] = extract_data[i].price;
     data[i][1] = extract_data[i].qty;
@@ -161,7 +159,7 @@ extract_depth_data_arrs(const Depth md, data::depth_type &dtype) {
 std::array<double, 2> weighted_price_bbo(const double &ask, const double &askv,
                                          const double &bid, const double &bidv,
                                          const double &tick_size,
-                                         double taker_fee,
+                                         const double &taker_fee,
                                          const double &vol_threshold_bid,
                                          const double &vol_threshold_ask);
 
@@ -336,7 +334,7 @@ std::array<double, 2> weighted_price_depth(
     const std::array<double, N> &asks, const std::array<double, N> &asksv,
     const std::array<double, N> &bids, const std::array<double, N> &bidsv,
     double tick_size, double vol_threshold_bid, double vol_threshold_ask,
-    double eps_thre = 1e-10, double wp_invalid_ticks = 2.0) {
+    double eps_thre = 1e-10, double wp_invalid_ticks = 0.0) {
   // 1. 验证所有档位有效
   for (int i = 0; i < N; ++i) {
     if (bids[i] <= eps_thre || asks[i] <= eps_thre || bidsv[i] <= eps_thre ||
@@ -408,10 +406,10 @@ double fetch_attr(const data::currency &currency, const ryml::Tree &settings_,
 double fetch_max_percentage(const data::currency &currency,
                             const ryml::Tree &settings_);
 
-double get_currency_usd_mp(const std::string currency_str,
+double get_currency_usd_mp(const std::string &currency_str,
                            const data::InstrumentData &InstData_);
 
-double get_currency_hedge_usdt_mp(const std::string currency_str,
+double get_currency_hedge_usdt_mp(const std::string &currency_str,
                                   const data::InstrumentData &InstData_);
 
 void update_pnl(
@@ -438,18 +436,18 @@ std::string get_fps_obs_str(
     const std::unordered_map<data::currency, data::fair_price_data> &fps_map_);
 
 std::string get_fps_str(
-    const StrategyConfig &CFG_, const data::InstrumentData &InstData_,
+    const Configs &CFG_, const data::InstrumentData &InstData_,
     const std::unordered_map<data::currency, data::fair_price_data> &fps_map_);
 
 std::string get_inst_str(const data::InstrumentData &InstData_,
-                         const StrategyConfig &CFG_);
+                         const Configs &CFG_);
 
 std::string get_delay_str(data::InstrumentData &InstData_);
 
 std::string get_hedge_position_str(
     const std::vector<data::currency> &digital_currencies,
     const data::InstrumentData &InstData_,
-    const std::unordered_map<data::currency, data::fair_price_data> &fps_map);
+    const std::unordered_map<data::currency, data::fair_price_data> &fps_map_);
 
 std::string get_balance_str(
     const std::unordered_map<data::currency, data::BalanceManager> &BlcMng_,
@@ -478,7 +476,7 @@ void update_orders_cost_sum(
         &fetch_orders_map_,
     const data::InstrumentManager &InstManager_,
     const std::unordered_map<data::currency, data::BalanceManager> &BlcMng_,
-    const StrategyConfig &CFG_);
+    const Configs &CFG_);
 
 void calculate_cost_transfer_sum(
     std::unordered_map<data::currency, data::fetch_orders_data>
@@ -498,55 +496,54 @@ double adjust_fair_price(
     bool verbose = false, const double balance_adj = 0.999,
     const double BP = 0.0001);
 
-void update_cuscore(data::cuscore_data &cc, StrategyConfig &CFG_,
-                    const double &fp_bid, const double &fp_ask,
-                    bool verb = false);
+void update_cuscore(data::cuscore_data &cc, Configs &CFG_, const double &fp_bid,
+                    const double &fp_ask, bool verb = false);
 
 void update_ob_volume(
     data::InstrumentData &InstData_,
     std::unordered_map<data::currency, data::fair_price_data> &fps_map_);
 
 std::array<double, 2> fp_forex_IB(const double &fp_bid, const double &fp_ask,
-                                  const bool &flag_ib_, const double &ts_tmp,
+                                  const bool &flag_ib_, const int64_t &ts_tmp,
                                   const std::string &currency_str,
                                   data::bbo_data &ib_data);
 
-bool extract_fps(StrategyConfig &CFG_, data::InstrumentData &InstData_,
+bool extract_fps(Configs &CFG_, data::InstrumentData &InstData_,
                  int64_t &global_ts, const std::string &fp_file_path);
 
-void dump_fp(StrategyConfig &CFG_, std::ofstream &file_cache_,
+void dump_fp(Configs &CFG_, std::ofstream &file_cache_,
              const std::string &inputs, const std::string &date);
 
-int judge_calculate_params(const StrategyConfig &CFG_, int64_t &global_ts,
+int judge_calculate_params(const Configs &CFG_, int64_t &global_ts,
                            data::InstrumentData &InstData_,
                            const std::string &dist_symbol);
 
-void save_calculate_params(const StrategyConfig &CFG_, int64_t &global_ts,
+void save_calculate_params(const Configs &CFG_, int64_t &global_ts,
                            data::InstrumentData &InstData_,
                            const std::string &dist_symbol);
 
 void cal_and_save_pair_statics(const data::PairStats &pair_stats,
-                               const StrategyConfig &CFG_,
+                               const Configs &CFG_,
                                const data::InstrumentData &InstData_,
                                const std::string &dist_symbol);
 
 // 读取ret.csv文件
-bool load_ret_csv(StrategyConfig &CFG_);
+bool load_ret_csv(Configs &CFG_);
 
-struct DataSavingParams {
-  std::mutex mut;
-  std::condition_variable cv;
-  bool updated = false;
-  bool stop = false;
-  StrategyConfig CFG_;
-  int64_t global_ts;
-  data::InstrumentData InstData_;
-  std::string dist_symbol;
+// struct DataSavingParams {
+//   std::mutex mut;
+//   std::condition_variable cv;
+//   bool updated = false;
+//   bool stop = false;
+//   Configs CFG_;
+//   int64_t global_ts;
+//   data::InstrumentData InstData_;
+//   std::string dist_symbol;
 
-  void save() {
-    save_calculate_params(CFG_, global_ts, InstData_, dist_symbol);
-  }
-};
+//   void save() {
+//     save_calculate_params(CFG_, global_ts, InstData_, dist_symbol);
+//   }
+// };
 
 void process_balances_monitor(
     std::unordered_map<data::currency, data::BalanceManager> &BlcMng_,
@@ -564,15 +561,14 @@ void print_fetch_orders_map(
 bool is_weekend_window_utc(int64_t timestamp_ns);
 
 void calculate_expected_return(data::InstrumentData &InstData_,
-                               const StrategyConfig &CFG_,
-                               bool verbose = false);
+                               const Configs &CFG_, bool verbose = false);
 
 inline double envelope_attack_release(double y, double u, double a_rel) {
   return (u >= y) ? u : (y + a_rel * (u - y));
 };
 
 void get_orders_margin(
-    data::InstrumentData &InstData_, const StrategyConfig &CFG_,
+    data::InstrumentData &InstData_, const Configs &CFG_,
     const std::unordered_map<data::currency, data::fair_price_data> &fps_map_,
     const std::unordered_map<data::currency, data::BalanceManager> &BlcMng_,
     bool verbose);

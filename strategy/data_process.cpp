@@ -1,8 +1,4 @@
 #include "data_process.h"
-#include "data.h"
-#include "nova_api_data_type.h"
-#include "nova_api_exch.h"
-#include "str_util.h"
 
 namespace DataProcess {
 
@@ -13,18 +9,18 @@ bool is_main_exchange(const std::string &inst_str,
 }
 
 // 获取交易所的手续费
-double get_exchange_taker_fee(const StrategyConfig &CFG_,
+double get_exchange_taker_fee(const Configs &CFG_,
                               const std::string &exchange) {
   if (exchange == "krk")
-    return CFG_.krk_taker_fee;
+    return CFG_.Strategy.Stable.krk_taker_fee;
   else if (exchange == "gt")
-    return CFG_.gt_taker_fee;
+    return CFG_.Strategy.Stable.gt_taker_fee;
   else if (exchange == "bn")
-    return CFG_.bn_taker_fee;
+    return CFG_.Strategy.Stable.bn_taker_fee;
   else if (exchange == "ok")
-    return CFG_.ok_taker_fee;
+    return CFG_.Strategy.Stable.ok_taker_fee;
   else if (exchange == "cb")
-    return CFG_.cb_taker_fee;
+    return CFG_.Strategy.Stable.cb_taker_fee;
   else if (exchange == "idealpro")
     return 0.0;
   else
@@ -57,7 +53,7 @@ using namespace sum_util;
 
 bool fetch_data(const nova::quote::DataInfo &one,
                 data::InstrumentData &InstData_, bool &flag_data_ready,
-                const StrategyConfig &CFG_) {
+                const Configs &CFG_) {
   const auto &quote_type = one.quote_type();
   auto &id_map = InstData_.IM.inststr2id_;
   std::string inst_str;
@@ -68,7 +64,7 @@ bool fetch_data(const nova::quote::DataInfo &one,
     ts = data.local_time;
     auto id = id_map.at(inst_str);
     auto &depth_map = InstData_.depth_map[id];
-    if (CFG_.backtest ||
+    if (CFG_.Strategy.Verbose.ob ||
         static_cast<uint64_t>(depth_map.sequence_num) < data.sequence_num)
       extract_depth_data(data, depth_map, InstData_.delay_map);
     else
@@ -113,7 +109,8 @@ bool fetch_data(const nova::quote::DataInfo &one,
   auto &id = id_map.at(inst_str);
   if (quote_type == NOVA_COIN_QUOTE_DEPTH ||
       quote_type == NOVA_COIN_QUOTE_DEPTH_LVN)
-    if (DataProcess::is_main_exchange(inst_str, CFG_.aim_exchange)) {
+    if (DataProcess::is_main_exchange(inst_str,
+                                      CFG_.Strategy.Stable.aim_exchange)) {
       // ASSERT_SINGLE_THREAD();
       const auto &depth = InstData_.depth_map.at(id);
       const auto bid0 = depth.bids[0][0];
@@ -140,8 +137,7 @@ bool fetch_data(const nova::quote::DataInfo &one,
 }
 
 void fetch_data_all(const DataInfoManager *datainfo,
-                    data::InstrumentData &InstData_,
-                    const StrategyConfig &CFG_) {
+                    data::InstrumentData &InstData_, const Configs &CFG_) {
   // * 实盘中datainfo推送可以有多条
   // * 只要更新了depth/depthlvn/bbo把所有depth/bbo更新
   // ! v中订阅了没有数据的值是unknown, 需要筛选掉
@@ -604,7 +600,7 @@ double fetch_max_percentage(const data::currency &currency,
   return std::stod(max_percentage_str);
 }
 
-double get_currency_usd_mp(const std::string currency_str,
+double get_currency_usd_mp(const std::string &currency_str,
                            const data::InstrumentData &InstData_) {
   const auto &inst_str = fmt::format("{}_usd.krk", currency_str);
   const auto &id = InstData_.IM.inststr2id_.at(inst_str);
@@ -613,7 +609,7 @@ double get_currency_usd_mp(const std::string currency_str,
   return (bid + ask) * 0.5;
 }
 
-double get_currency_hedge_usdt_mp(const std::string currency_str,
+double get_currency_hedge_usdt_mp(const std::string &currency_str,
                                   const data::InstrumentData &InstData_) {
   const auto &inst_str = fmt::format("{}_usdt.krk", currency_str);
   const auto &id = InstData_.IM.inststr2id_.at(inst_str);
@@ -780,10 +776,10 @@ std::string get_fps_obs_str(
 }
 
 std::string get_fps_str(
-    const StrategyConfig &CFG_, const data::InstrumentData &InstData_,
+    const Configs &CFG_, const data::InstrumentData &InstData_,
     const std::unordered_map<data::currency, data::fair_price_data> &fps_map_) {
   std::string op_ob = "";
-  for (const auto &currency : CFG_.trading_currencies) {
+  for (const auto &currency : CFG_.Strategy.Stable.trading_currencies) {
     const auto &currency_str = data::get_currency_name(currency);
     if (currency != data::currency::USD) {
       op_ob += "1.0,";
@@ -792,7 +788,7 @@ std::string get_fps_str(
     const auto &fp = fps_map_.at(currency).fps.get_last();
     op_ob += fmt::format("{},", fp);
   }
-  for (const auto &forex : CFG_.available_forex) {
+  for (const auto &forex : CFG_.Strategy.Stable.trading_currencies) {
     const auto &ib_str = fmt::format("{}_usd_cash.idealpro", forex);
     const auto &id_ib = InstData_.IM.inststr2id_.at(ib_str);
     if (sum_util::Find(InstData_.bbo_map, id_ib)) {
@@ -809,7 +805,7 @@ std::string get_fps_str(
 }
 
 std::string get_inst_str(const data::InstrumentData &InstData_,
-                         const StrategyConfig &CFG_) {
+                         const Configs &CFG_) {
   std::string op_inst = "instrument update for coin ";
   for (const auto &one : InstData_.depth_map) {
     const auto &id = one.first;
@@ -820,7 +816,8 @@ std::string get_inst_str(const data::InstrumentData &InstData_,
     const auto &ask0 = depth_map.asks[0][0];
     double vol_fp_bid, vol_fp_ask, fp_bid, fp_ask, cuscore_bid, cuscore_ask;
     int pp;
-    if (DataProcess::is_main_exchange(inst_str, CFG_.aim_exchange)) {
+    if (DataProcess::is_main_exchange(inst_str,
+                                      CFG_.Strategy.Stable.aim_exchange)) {
       const auto &vd = InstData_.vol_map.at(id);
       vol_fp_bid = vd.vol_bid_fp;
       vol_fp_ask = vd.vol_ask_fp;
@@ -999,9 +996,9 @@ void update_orders_cost_sum(
         &fetch_orders_map_,
     const data::InstrumentManager &InstManager_,
     const std::unordered_map<data::currency, data::BalanceManager> &BlcMng_,
-    const StrategyConfig &CFG_) {
+    const Configs &CFG_) {
   calculate_cost_transfer_sum(fetch_orders_map_, InstManager_, BlcMng_, false);
-  const auto &settings = CFG_.setting;
+  const auto &settings = CFG_.Strategy.setting;
   for (auto &item : fetch_orders_map_) {
     const auto &currency = item.first;
     const auto &currency_str = data::get_currency_name(currency);
@@ -1009,9 +1006,10 @@ void update_orders_cost_sum(
     auto &transfer_sum = item.second.transfer_sum;
     const auto &balance = BlcMng_.at(currency).balance_live;
     const auto &balance_default = BlcMng_.at(currency).balance_default;
-    const auto &multi = (sum_util::Find(CFG_.digital_currencies, currency))
-                            ? 1 - CFG_.digital_position_thre
-                            : 0.05;
+    const auto &multi =
+        (sum_util::Find(CFG_.Strategy.Stable.digital_currencies, currency))
+            ? 1 - CFG_.Strategy.digital_position_thre
+            : 0.05;
     if (cost_sum > 0 && balance - cost_sum < balance_default * multi) {
       double transfer_factor =
           std::max(0.0, (balance - balance_default * multi) / cost_sum);
@@ -1046,9 +1044,9 @@ void update_orders_cost_sum(
             if (IC->base == currency || IC->quote == currency) {
               for (auto &order : item4.second) {
                 double qty_tmp = order.quantity;
-                if (CFG_.flexible_adjust) {
+                if (CFG_.Strategy.flexible_adjust) {
                   const auto &vp = (IC->fp_bid + IC->fp_ask) * 0.5;
-                  const auto &limit_qty = CFG_.limit_usd / vp;
+                  const auto &limit_qty = CFG_.Strategy.Stable.limit_usd / vp;
                   order.quantity =
                       (order.quantity * transfer_factor < limit_qty)
                           ? limit_qty
@@ -1276,8 +1274,8 @@ double adjust_fair_price(
   }
 }
 
-void update_cuscore(data::cuscore_data &cc, StrategyConfig &CFG_,
-                    const double &fp_bid, const double &fp_ask, bool verb) {
+void update_cuscore(data::cuscore_data &cc, Configs &CFG_, const double &fp_bid,
+                    const double &fp_ask, bool verb) {
   // ⚠️ NaN风险点0: 输入参数检查
   // - 如果fp_bid或fp_ask是NaN，后续所有计算都会传播NaN
   // - 如果alpha_fast/mid/slow是NaN或异常值，EMAStep会传播NaN
@@ -1287,7 +1285,7 @@ void update_cuscore(data::cuscore_data &cc, StrategyConfig &CFG_,
               fp_bid, fp_ask, cc.cuscore_cnt, cc.ema_bid_slow, cc.ema_ask_slow,
               cc.sigma_bid, cc.sigma_ask);
   }
-  auto &params = CFG_.cuscore_params;
+  auto &params = CFG_.Strategy.cuscore_params;
   const auto &span_slow = params.span_slow;
   const auto &span_fast = params.span_fast;
   const auto &span_mid = params.span_mid;
@@ -1395,7 +1393,7 @@ void update_cuscore(data::cuscore_data &cc, StrategyConfig &CFG_,
   cc.diffs_ask_fast.add(diff_ask_fast);
   cc.diffs_bid_mid.add(diff_bid_mid);
   cc.diffs_ask_mid.add(diff_ask_mid);
-  if (cc.cuscore_cnt > span_slow && CFG_.cuscore_threshold_slow < 10) {
+  if (cc.cuscore_cnt > span_slow && CFG_.Strategy.Cuscore.threshold_slow < 10) {
     double cuscore_bid_slow = 0, cuscore_ask_slow = 0;
     auto diffs_bid_slow_iter =
         cc.diffs_bid_slow.get_column_accessor<0>(span_slow);
@@ -1436,7 +1434,7 @@ void update_cuscore(data::cuscore_data &cc, StrategyConfig &CFG_,
     cc.cuscore_bid_slow = 0.0;
     cc.cuscore_ask_slow = 0.0;
   }
-  if (cc.cuscore_cnt > span_mid && CFG_.cuscore_threshold_mid < 10) {
+  if (cc.cuscore_cnt > span_mid && CFG_.Strategy.Cuscore.threshold_mid < 10) {
     double cuscore_bid_mid = 0, cuscore_ask_mid = 0;
     auto diffs_bid_mid_iter = cc.diffs_bid_mid.get_column_accessor<0>(span_mid);
     auto diffs_ask_mid_iter = cc.diffs_ask_mid.get_column_accessor<0>(span_mid);
@@ -1517,7 +1515,7 @@ void update_cuscore(data::cuscore_data &cc, StrategyConfig &CFG_,
     cc.cuscore_bid_mid = 0.0;
     cc.cuscore_ask_mid = 0.0;
   }
-  if (cc.cuscore_cnt > span_fast && CFG_.cuscore_threshold_fast < 10) {
+  if (cc.cuscore_cnt > span_fast && CFG_.Strategy.Cuscore.threshold_fast < 10) {
     double cuscore_bid_fast = 0, cuscore_ask_fast = 0;
     auto diffs_bid_fast_iter =
         cc.diffs_bid_fast.get_column_accessor<0>(span_fast);
@@ -1554,28 +1552,28 @@ void update_cuscore(data::cuscore_data &cc, StrategyConfig &CFG_,
     cc.cuscore_bid_fast = 0.0;
     cc.cuscore_ask_fast = 0.0;
   }
-  if (cc.cuscore_cnt < 5 * CFG_.cuscore_span_slow)
+  if (cc.cuscore_cnt < 5 * CFG_.Strategy.Cuscore.span_slow)
     cc.cuscore_cnt++;
-  // double thre = CFG_.cuscore_threshold_fast;
+  // double thre = CFG_.Strategy.Stable.cuscore_threshold_fast;
   double thre_fast = 0.0, thre_mid = 0.0, thre_slow = 0.0;
   // cuscore触发趋势后 判断是否已回复
   if (cc.cuscore_bid_flag_fast &&
-      (cc.cuscore_bid_fast < CFG_.cuscore_threshold_fast - thre_fast))
+      (cc.cuscore_bid_fast < CFG_.Strategy.Cuscore.threshold_fast - thre_fast))
     cc.cuscore_bid_flag_fast = false;
   if (cc.cuscore_bid_flag_mid &&
-      (cc.cuscore_bid_mid < CFG_.cuscore_threshold_mid - thre_mid))
+      (cc.cuscore_bid_mid < CFG_.Strategy.Cuscore.threshold_mid - thre_mid))
     cc.cuscore_bid_flag_mid = false;
   if (cc.cuscore_bid_flag_slow &&
-      (cc.cuscore_bid_slow < CFG_.cuscore_threshold_slow - thre_slow))
+      (cc.cuscore_bid_slow < CFG_.Strategy.Cuscore.threshold_slow - thre_slow))
     cc.cuscore_bid_flag_slow = false;
   if (cc.cuscore_ask_flag_fast &&
-      (cc.cuscore_ask_fast > -CFG_.cuscore_threshold_fast + thre_fast))
+      (cc.cuscore_ask_fast > -CFG_.Strategy.Cuscore.threshold_fast + thre_fast))
     cc.cuscore_ask_flag_fast = false;
   if (cc.cuscore_ask_flag_mid &&
-      (cc.cuscore_ask_mid > -CFG_.cuscore_threshold_mid + thre_mid))
+      (cc.cuscore_ask_mid > -CFG_.Strategy.Cuscore.threshold_mid + thre_mid))
     cc.cuscore_ask_flag_mid = false;
   if (cc.cuscore_ask_flag_slow &&
-      (cc.cuscore_ask_slow > -CFG_.cuscore_threshold_slow + thre_slow))
+      (cc.cuscore_ask_slow > -CFG_.Strategy.Cuscore.threshold_slow + thre_slow))
     cc.cuscore_ask_flag_slow = false;
   if (!cc.cuscore_bid_flag_fast && !cc.cuscore_bid_flag_slow &&
       !cc.cuscore_bid_flag_mid)
@@ -1584,17 +1582,17 @@ void update_cuscore(data::cuscore_data &cc, StrategyConfig &CFG_,
       !cc.cuscore_ask_flag_mid)
     cc.cuscore_ask_flag = false;
   // cuscore触发趋势
-  if (cc.cuscore_bid_fast > CFG_.cuscore_threshold_fast)
+  if (cc.cuscore_bid_fast > CFG_.Strategy.Cuscore.threshold_fast)
     cc.cuscore_bid_flag_fast = true;
-  if (cc.cuscore_bid_mid > CFG_.cuscore_threshold_mid)
+  if (cc.cuscore_bid_mid > CFG_.Strategy.Cuscore.threshold_mid)
     cc.cuscore_bid_flag_mid = true;
-  if (cc.cuscore_bid_slow > CFG_.cuscore_threshold_slow)
+  if (cc.cuscore_bid_slow > CFG_.Strategy.Cuscore.threshold_slow)
     cc.cuscore_bid_flag_slow = true;
-  if (cc.cuscore_ask_fast < -CFG_.cuscore_threshold_fast)
+  if (cc.cuscore_ask_fast < -CFG_.Strategy.Cuscore.threshold_fast)
     cc.cuscore_ask_flag_fast = true;
-  if (cc.cuscore_ask_mid < -CFG_.cuscore_threshold_mid)
+  if (cc.cuscore_ask_mid < -CFG_.Strategy.Cuscore.threshold_mid)
     cc.cuscore_ask_flag_mid = true;
-  if (cc.cuscore_ask_slow < -CFG_.cuscore_threshold_slow)
+  if (cc.cuscore_ask_slow < -CFG_.Strategy.Cuscore.threshold_slow)
     cc.cuscore_ask_flag_slow = true;
   if (cc.cuscore_bid_flag_slow || cc.cuscore_bid_flag_fast ||
       cc.cuscore_bid_flag_mid)
@@ -1704,9 +1702,9 @@ std::array<double, 2> fp_forex_IB(const double &fp_bid, const double &fp_ask,
   }
 }
 
-bool extract_fps(StrategyConfig &CFG_, data::InstrumentData &InstData_,
+bool extract_fps(Configs &CFG_, data::InstrumentData &InstData_,
                  int64_t &global_ts, const std::string &fp_file_path) {
-  const auto &available_forex = CFG_.available_forex;
+  const auto &available_forex = CFG_.Strategy.available_forex;
   if (!sum_util::FileExists(fp_file_path)) {
     INFO_FLOG("fp_file_path: {} not found", fp_file_path.c_str());
     return false;
@@ -1762,7 +1760,7 @@ bool extract_fps(StrategyConfig &CFG_, data::InstrumentData &InstData_,
 
   // 安全读取所有货币的 fair price 列，跳过缺失或不完整的列
   std::unordered_map<data::currency, std::vector<double>> fps;
-  for (const auto &currency : CFG_.trading_currencies) {
+  for (const auto &currency : CFG_.Strategy.Stable.trading_currencies) {
     const std::string &currency_name = data::get_currency_name(currency);
 
     // 检查列是否存在
@@ -1831,7 +1829,7 @@ bool extract_fps(StrategyConfig &CFG_, data::InstrumentData &InstData_,
       double value = *it;
       sd.fps_begin.add({value, value});
       sd.fps_fast_begin.add({value, value});
-      if (sum_util::Find(CFG_.digital_currencies, base))
+      if (sum_util::Find(CFG_.Strategy.Stable.digital_currencies, base))
         DataProcess::update_cuscore(cc, CFG_, value, value);
     }
     if (quote == data::currency::USD &&
@@ -1892,11 +1890,11 @@ bool extract_fps(StrategyConfig &CFG_, data::InstrumentData &InstData_,
   return true;
 }
 
-void dump_fp(StrategyConfig &CFG_, std::ofstream &file_cache_,
+void dump_fp(Configs &CFG_, std::ofstream &file_cache_,
              const std::string &inputs, const std::string &date) {
   auto &file_cache_path = CFG_.Server.Log.fp_path;
-  const auto &trading_currencies = CFG_.trading_currencies;
-  const auto &available_forex = CFG_.available_forex;
+  const auto &trading_currencies = CFG_.Strategy.Stable.trading_currencies;
+  const auto &available_forex = CFG_.Strategy.available_forex;
   std::filesystem::path dir_path =
       std::filesystem::path(file_cache_path).parent_path();
   if (!dir_path.empty() && !std::filesystem::exists(dir_path)) {
@@ -1934,12 +1932,12 @@ void dump_fp(StrategyConfig &CFG_, std::ofstream &file_cache_,
     file_cache_ << inputs << std::endl;
 }
 
-int judge_calculate_params(const StrategyConfig &CFG_, int64_t &global_ts,
+int judge_calculate_params(const Configs &CFG_, int64_t &global_ts,
                            data::InstrumentData &InstData_,
                            const std::string &dist_symbol) {
-  const auto &root_path = CFG_.root_path;
-  const auto &digital_currencies = CFG_.digital_currencies;
-  const auto &available_forex = CFG_.available_forex;
+  const auto &root_path = CFG_.Strategy.Stable.root_dir;
+  const auto &digital_currencies = CFG_.Strategy.Stable.digital_currencies;
+  const auto &available_forex = CFG_.Strategy.available_forex;
 
   const auto &json_path =
       root_path +
@@ -2064,11 +2062,11 @@ int judge_calculate_params(const StrategyConfig &CFG_, int64_t &global_ts,
   }
 }
 
-void save_calculate_params(const StrategyConfig &CFG_, int64_t &global_ts,
+void save_calculate_params(const Configs &CFG_, int64_t &global_ts,
                            data::InstrumentData &InstData_,
                            const std::string &dist_symbol) {
   const auto &json_path =
-      CFG_.root_path +
+      CFG_.Strategy.Stable.root_dir +
       fmt::format("config/cal_params/cal_params_{}.json", dist_symbol);
   nlohmann::json j;
   j["timestamp"] = global_ts;
@@ -2082,7 +2080,7 @@ void save_calculate_params(const StrategyConfig &CFG_, int64_t &global_ts,
     const auto &base = IC->base;
     const auto &quote = IC->quote;
     const auto &base_str = IC->base_str;
-    if (sum_util::Find(CFG_.digital_currencies, base)) {
+    if (sum_util::Find(CFG_.Strategy.Stable.digital_currencies, base)) {
       auto N = std::min(cc.diffs_bid_slow.get_max_length(),
                         cc.diffs_bid_slow.size());
       auto N_fast = std::min(cc.diffs_bid_fast.get_max_length(),
@@ -2113,7 +2111,7 @@ void save_calculate_params(const StrategyConfig &CFG_, int64_t &global_ts,
           {"cuscore_cnt", cc.diffs_ask_slow.size()}};
     }
     if (quote == data::currency::USD &&
-        sum_util::Find(CFG_.available_forex, base_str)) {
+        sum_util::Find(CFG_.Strategy.available_forex, base_str)) {
       const auto &ib_inst = fmt::format("{}_usd_cash.idealpro", base_str);
       const auto &id_ib_inst = InstData_.IM.inststr2id_.at(ib_inst);
       auto &ib_data = InstData_.bbo_map[id_ib_inst];
@@ -2155,7 +2153,7 @@ void save_calculate_params(const StrategyConfig &CFG_, int64_t &global_ts,
 }
 
 void cal_and_save_pair_statics(const data::PairStats &pair_stats,
-                               const StrategyConfig &CFG_,
+                               const Configs &CFG_,
                                const data::InstrumentData &InstData_,
                                const std::string &dist_symbol) {
   const size_t n = pair_stats.tick_len;
@@ -2183,7 +2181,7 @@ void cal_and_save_pair_statics(const data::PairStats &pair_stats,
     const double frac = idx - lo;
     return (lo == hi) ? beg[lo] : beg[lo] * (1 - frac) + beg[hi] * frac;
   };
-  const auto &root_path = CFG_.root_path;
+  const auto &root_path = CFG_.Strategy.Stable.root_dir;
   std::filesystem::path dir_path = std::filesystem::path(root_path);
   const auto pair_stats_root =
       sum_util::JoinPath(dir_path.string(), "log", "pair_stats");
@@ -2212,7 +2210,7 @@ void cal_and_save_pair_statics(const data::PairStats &pair_stats,
     const auto &inst_data = kv.second;
     auto *IC = InstData_.IM.FindByUniId(id);
     const std::string inst_str = IC ? IC->inst_str : "";
-    const auto &pc = GetPairConfig(CFG_.pair_configs, inst_str);
+    const auto &pc = GetPairConfig(CFG_.Strategy.pair_configs, inst_str);
     const double p_s_bid = pc.s_bps_summary_percentile_bid / 100.0;
     const double p_s_ask = pc.s_bps_summary_percentile_ask / 100.0;
     const double p_d5_bid = pc.depth5_summary_percentile_bid / 100.0;
@@ -2371,11 +2369,11 @@ void print_fetch_orders_map(
 }
 
 // 读取ret.csv文件
-bool load_ret_csv(StrategyConfig &CFG_) {
+bool load_ret_csv(Configs &CFG_) {
   try {
-    // 从CFG_.Quote.backtest.begin_time提取日期
+    // 从CFG_.Strategy.Stable.Quote.backtest.begin_time提取日期
     std::string date_str = "";
-    if (CFG_.backtest && !CFG_.Quote.backtest.begin_time.empty()) {
+    if (CFG_.Strategy.backtest && !CFG_.Quote.backtest.begin_time.empty()) {
       // begin_time格式: "20250101.00:00:00" 或 "20250101 00:00:00"
       const auto &time_split =
           sum_util::StrSplit(CFG_.Quote.backtest.begin_time, '.');
@@ -2394,11 +2392,12 @@ bool load_ret_csv(StrategyConfig &CFG_) {
     // 构建文件路径
     std::string ret_csv_path;
     if (!date_str.empty()) {
-      ret_csv_path = sum_util::JoinPath(CFG_.root_path,
+      ret_csv_path = sum_util::JoinPath(CFG_.Strategy.Stable.root_dir,
                                         fmt::format("ret_{}.csv", date_str));
       INFO_FLOG("Using date-specific ret file: {}", ret_csv_path);
     } else {
-      ret_csv_path = sum_util::JoinPath(CFG_.root_path, "ret.csv");
+      ret_csv_path =
+          sum_util::JoinPath(CFG_.Strategy.Stable.root_dir, "ret.csv");
       INFO_FLOG("Using default ret file: {}", ret_csv_path);
     }
 
@@ -2410,9 +2409,8 @@ bool load_ret_csv(StrategyConfig &CFG_) {
           sum_util::ReadCsv<std::string>(ret_csv_path, ',', true, false);
 
       // 清空现有数据
-      CFG_.ts_ret.clear();
-      CFG_.rets.clear();
-      CFG_.idx_ret = 0; // 重置ret数据索引
+      CFG_.Strategy.ts_ret.clear();
+      CFG_.Strategy.rets.clear();
 
       if (csv_data.empty()) {
         WARNING_FLOG("CSV file is empty, skipping ret.csv reading");
@@ -2433,8 +2431,8 @@ bool load_ret_csv(StrategyConfig &CFG_) {
       // 以及至少一个currency列）
       if (num_columns >= 3) {
         // 为每个digital_currency初始化vector
-        for (const auto &currency : CFG_.digital_currencies) {
-          CFG_.rets[currency] = std::vector<double>();
+        for (const auto &currency : CFG_.Strategy.Stable.digital_currencies) {
+          CFG_.Strategy.rets[currency] = std::vector<double>();
         }
 
         // 解析数据行（跳过header行）
@@ -2449,10 +2447,11 @@ bool load_ret_csv(StrategyConfig &CFG_) {
           try {
             // 解析timestamp列（第1列，索引0）
             int64_t timestamp = std::stoll(row[0]);
-            CFG_.ts_ret.push_back(timestamp);
+            CFG_.Strategy.ts_ret.push_back(timestamp);
 
             // 解析每个digital_currency的ret值
-            for (const auto &currency : CFG_.digital_currencies) {
+            for (const auto &currency :
+                 CFG_.Strategy.Stable.digital_currencies) {
               std::string currency_name = data::get_currency_name(currency);
               std::string column_name = fmt::format(
                   "ret_{}t",
@@ -2471,13 +2470,13 @@ bool load_ret_csv(StrategyConfig &CFG_) {
 
               if (found && col_idx < row.size()) {
                 double ret = std::stod(row[col_idx]);
-                CFG_.rets[currency].push_back(ret);
+                CFG_.Strategy.rets[currency].push_back(ret);
               } else {
                 // 如果找不到对应的列，填充0或跳过
                 WARNING_FLOG(
                     "Column '{}' not found for currency {}, filling with 0",
                     column_name, currency_name);
-                CFG_.rets[currency].push_back(0.0);
+                CFG_.Strategy.rets[currency].push_back(0.0);
               }
             }
           } catch (const std::exception &e) {
@@ -2488,15 +2487,15 @@ bool load_ret_csv(StrategyConfig &CFG_) {
         }
 
         INFO_FLOG("Successfully loaded {} rows from ret.csv",
-                  CFG_.ts_ret.size());
-        if (!CFG_.ts_ret.empty()) {
-          INFO_FLOG("Timestamp range: {} to {}", CFG_.ts_ret.front(),
-                    CFG_.ts_ret.back());
+                  CFG_.Strategy.ts_ret.size());
+        if (!CFG_.Strategy.ts_ret.empty()) {
+          INFO_FLOG("Timestamp range: {} to {}", CFG_.Strategy.ts_ret.front(),
+                    CFG_.Strategy.ts_ret.back());
         }
 
         // 显示加载的currency信息
-        INFO_FLOG("Loaded rets for {} currencies:", CFG_.rets.size());
-        for (const auto &[currency, rets_vector] : CFG_.rets) {
+        INFO_FLOG("Loaded rets for {} currencies:", CFG_.Strategy.rets.size());
+        for (const auto &[currency, rets_vector] : CFG_.Strategy.rets) {
           INFO_FLOG("  Currency: {}, Records: {}, Sample values: [{}, {}, {}]",
                     data::get_currency_name(currency), rets_vector.size(),
                     rets_vector.empty() ? 0.0 : rets_vector[0],
@@ -2549,7 +2548,7 @@ bool is_weekend_window_utc(int64_t timestamp_ns) {
 }
 
 void calculate_expected_return(data::InstrumentData &InstData_,
-                               const StrategyConfig &CFG_, bool verbose) {
+                               const Configs &CFG_, bool verbose) {
   double expected_return = 0.0, usd_values = 0.0;
   for (auto &[id, OM] : InstData_.order_map) {
     auto *IC = InstData_.IM.FindByUniId(id);
@@ -2557,8 +2556,8 @@ void calculate_expected_return(data::InstrumentData &InstData_,
     auto &operation_flags = OM.operation_flags;
     if (left_orders.empty())
       continue;
-    const auto &inst_usd =
-        format_main_exchange_usd_pair(IC->base_str, CFG_.aim_exchange);
+    const auto &inst_usd = format_main_exchange_usd_pair(
+        IC->base_str, CFG_.Strategy.Stable.aim_exchange);
     auto *IC_usd = InstData_.IM.FindByInstStr(inst_usd);
     const auto &dd_usd = InstData_.depth_map[IC_usd->uni_id];
     for (auto *left_order : left_orders) {
@@ -2579,7 +2578,7 @@ void calculate_expected_return(data::InstrumentData &InstData_,
 }
 
 void get_orders_margin(
-    data::InstrumentData &InstData_, const StrategyConfig &CFG_,
+    data::InstrumentData &InstData_, const Configs &CFG_,
     const std::unordered_map<data::currency, data::fair_price_data> &fps_map_,
     const std::unordered_map<data::currency, data::BalanceManager> &BlcMng_,
     bool verbose) {
@@ -2647,8 +2646,9 @@ void get_orders_margin(
           }
         }
       }
-      double factor = DataProcess::adjust_fair_price(
-          *IC, currency, order.price, qty, CFG_.setting, BlcMng_, verbose);
+      double factor = DataProcess::adjust_fair_price(*IC, currency, order.price,
+                                                     qty, CFG_.Strategy.setting,
+                                                     BlcMng_, verbose);
       INFO_FLOG("order.price: {}, depth: {}", order.price, depth);
       double ret_adjust =
           (order.side == NOVA_SIDE_SELL) ? ret / factor : ret * factor;

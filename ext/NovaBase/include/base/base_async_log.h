@@ -236,11 +236,10 @@ public:
       if (obj.type() == typeid(int)) {
         args[Idx] = fmt::detail::make_arg<Context>(std::any_cast<int &>(obj));
       } else if (obj.type() == typeid(char *)) {
-        args[Idx] = fmt::detail::make_arg<Context>(
-            std::any_cast<char *&>(obj));
+        args[Idx] = fmt::detail::make_arg<Context>(std::any_cast<char *&>(obj));
       } else if (obj.type() == typeid(const char *)) {
-        args[Idx] = fmt::detail::make_arg<Context>(
-            std::any_cast<const char *&>(obj));
+        args[Idx] =
+            fmt::detail::make_arg<Context>(std::any_cast<const char *&>(obj));
       } else if (obj.type() == typeid(double)) {
         args[Idx] =
             fmt::detail::make_arg<Context>(std::any_cast<double &>(obj));
@@ -335,7 +334,7 @@ public:
 
     DeserializeArgs<Context, 0, N>((char *)(hdr + 1), args.data());
 
-    fmt::detail::vformat_to(
+    fmt::detail::vprintf(
         out, format, fmt::basic_format_args<Context>(args.data(), num_args));
   }
 
