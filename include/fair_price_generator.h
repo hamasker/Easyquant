@@ -1,6 +1,7 @@
 #pragma once
 #include "common/data.h"
-#include "configs/strategy_config.h"
+#include "configs/configs.h"
+using StrategyConfig = Configs;
 #include <deque>
 #include <unordered_map>
 #include <utility>
@@ -47,6 +48,10 @@ private:
   double ts_forex_update = 0;
   double fp_bid_median;
   double fp_ask_median;
+  double volume_threshold = 0.0;
+  int fp_update_times = 0;
+  bool first_cal = true;
+  bool cal_time = false;
 
   std::unordered_map<data::currency, data::fair_price_data> &fps_map_;
   data::InstrumentData &InstData_;

@@ -816,12 +816,9 @@ struct InstrumentComponent {
       prob_params_buy = sum_util::ReadCsv(file_dir_sell);
       prob_params_sell = sum_util::ReadCsv(file_dir_buy);
     } catch (const std::exception &e) {
-      config_path = "/home/chenyr/account_mock/config/prob_params/kraken/";
-      std::string file_dir_buy = config_path + currency_pair_read + "_buy.csv";
-      std::string file_dir_sell =
-          config_path + currency_pair_read + "_sell.csv";
-      prob_params_buy = sum_util::ReadCsv(file_dir_sell);
-      prob_params_sell = sum_util::ReadCsv(file_dir_buy);
+      // CSV 文件不存在或读取失败: 保留空向量
+      prob_params_buy.clear();
+      prob_params_sell.clear();
     } // ! 注意prob的含义
     std::string file_dir_edges = config_path + currency_pair_str + "_edges.csv";
     std::string file_dir_markout =

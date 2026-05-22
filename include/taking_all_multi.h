@@ -1,6 +1,7 @@
 #pragma once
 
 #include "common/data.h"
+#include "common/scheduler.h"
 #include "config_reloader.h"
 #include "configs/configs.h"
 #include "data_process.h"
@@ -44,8 +45,6 @@ public: // * 各类方法
                      const SecurityPosition *position,
                      NOVA_ORDER_STATUS done_status) override;
   void on_reminder(void *data, uint64_t cur_ns) override;
-  void OnRspTradeInformation(TradeEngine *engine, nlohmann::json &rsp,
-                             int req_id) override;
 
   void get_trade_engine();
 
@@ -55,25 +54,39 @@ public: // * 各类方法
 
   void subscribe_instruments(std::string inst_str, bool sub_spot = true);
 
-  const DataInfoManager *last_data_info;
+  void on_poll(int64_t local_ns) override;
+  void do_calculations(int64_t current_ts);
+  void process_disconnect(int64_t current_ts);
+  void process_negative(int64_t current_ts);
+  void process_fp(int64_t current_ts);
+  void process_order(int64_t current_ts);
+
+  void accumulate_turnover(const data::InstrumentComponent &IC, double price,
+                           double qty);
 
   Configs CFG_;
   std::unique_ptr<nova::config::ConfigReloader> config_reloader_;
 
-private:
-  std::vector<SubTopic> subs;
-  const AccountPosition *account_position_;
-  nova::trade::TradeEngine *engine_aim = nullptr;
+  const DataInfoManager *last_data_info;
 
 private:
   data::InstrumentData InstData_;
-
   std::unordered_map<data::currency, data::fair_price_data> fps_map_;
   std::unordered_map<data::currency, data::BalanceManager> BlcMng_;
   std::unordered_map<data::currency, data::volume_data> volumes_;
   std::unordered_map<data::currency, data::hedge_position_data>
       hedge_positions_;
-
-private:
   data::PairStats pair_stats_;
+
+  std::vector<SubTopic> subs;
+  const AccountPosition *account_position_;
+  nova::trade::TradeEngine *engine_aim = nullptr;
+
+  nova::ModuleScheduler scheduler_;
+
+  int64_t global_ts = 0;
 };
+
+#ifdef COINRUNNER_BUILD
+#include "coinrunner_log.h"
+#endif

@@ -64,17 +64,20 @@ bool fetch_data(const nova::quote::DataInfo &one,
     ts = data.local_time;
     auto id = id_map.at(inst_str);
     auto &depth_map = InstData_.depth_map[id];
-    if (CFG_.Strategy.Verbose.ob ||
-        static_cast<uint64_t>(depth_map.sequence_num) < data.sequence_num)
+    if (CFG_.Strategy.Verbose.ob)
+      DEBUG_FLOG("{} depth bid: {}, ask: {}", inst_str, data.bid[0].price,
+                 data.ask[0].price);
+    if (static_cast<uint64_t>(depth_map.sequence_num) < data.sequence_num)
       extract_depth_data(data, depth_map, InstData_.delay_map);
-    else
-      return flag_data_ready;
   } else if (quote_type == NOVA_COIN_QUOTE_DEPTH_LVN) {
     const auto &data = *static_cast<const DepthLVN *>(one.buffer().back());
     inst_str = data.instrument_id.symbol;
     ts = data.local_time;
     auto id = id_map.at(inst_str);
     auto &depth_map = InstData_.depth_map[id];
+    if (CFG_.Strategy.Verbose.ob)
+      DEBUG_FLOG("{} depth_lvn bid: {}, ask: {}", inst_str, data.bid[0].price,
+                 data.ask[0].price);
     extract_depth_data(data, depth_map, InstData_.delay_map);
   } else if (quote_type == NOVA_COIN_QUOTE_BBO) {
     const auto &data = *static_cast<const BBO *>(one.buffer().back());
@@ -82,6 +85,9 @@ bool fetch_data(const nova::quote::DataInfo &one,
     ts = data.local_time;
     auto id = id_map.at(inst_str);
     auto &bbo_map = InstData_.bbo_map[id];
+    if (CFG_.Strategy.Verbose.ob)
+      DEBUG_FLOG("{} bbo bid: {}, ask: {}", inst_str, data.bid_price,
+                 data.ask_price);
     extract_bbo_data(data, bbo_map, InstData_.delay_map);
   } else if (quote_type == NOVA_COIN_QUOTE_BAR) {
     const auto &data = *static_cast<const Bar *>(one.buffer().back());
@@ -89,6 +95,9 @@ bool fetch_data(const nova::quote::DataInfo &one,
     ts = data.local_time;
     auto id = id_map.at(inst_str);
     auto &bar_map = InstData_.bar_map[id];
+    if (CFG_.Strategy.Verbose.ob)
+      DEBUG_FLOG("{} bar high: {}, low: {}, open: {}, close: {}", inst_str,
+                 data.high, data.low, data.open, data.close);
     extract_bar_data(data, bar_map, InstData_.delay_map);
   } else if (quote_type == NOVA_COIN_QUOTE_TRADE) {
     const auto &data = *static_cast<const Trade *>(one.buffer().back());
@@ -102,6 +111,10 @@ bool fetch_data(const nova::quote::DataInfo &one,
     // 使用trade数据更新depth和bbo数据，提供更实时的价格信息
     auto &depth_map = InstData_.depth_map[id];
     auto &bbo_map = InstData_.bbo_map[id];
+    if (CFG_.Strategy.Verbose.ob)
+      DEBUG_FLOG("{} trade side: {}, price: {}, qty: {}", inst_str,
+                 data.side == NOVA_SIDE_BUY ? "BUY" : "SELL", data.price,
+                 data.qty);
     extract_trade_data(data, depth_map, bbo_map, InstData_.delay_map);
   } else {
     throw std::invalid_argument("invalid quote type!");
@@ -152,7 +165,7 @@ void fetch_data_all(const DataInfoManager *datainfo,
 void extract_depth_data(
     const Depth &md, data::depths_data &dd,
     std::unordered_map<uint16_t, data::delay_data> &delay_map) {
-  if (md.update_time < dd.server_ts) {
+  if (md.update_time <= dd.server_ts) {
     return;
   }
   std::string exch = GetExchangeStrFromId(md.instrument_id.exchange);
@@ -185,7 +198,7 @@ void extract_depth_data(
 void extract_depth_data(
     const DepthLVN &md, data::depths_data &dd,
     std::unordered_map<uint16_t, data::delay_data> &delay_map) {
-  if (md.update_time < dd.server_ts) {
+  if (md.update_time <= dd.server_ts) {
     return;
   }
   std::string exch = GetExchangeStrFromId(md.instrument_id.exchange);
@@ -214,7 +227,7 @@ void extract_depth_data(
 void extract_bbo_data(const BBO &md, data::bbo_data &dd,
                       std::unordered_map<uint16_t, data::delay_data> &delay_map,
                       double alpha_slow, double alpha_fast) {
-  if (md.update_time < dd.server_ts) {
+  if (md.update_time <= dd.server_ts) {
     return;
   }
   std::string exch = GetExchangeStrFromId(md.instrument_id.exchange);
@@ -259,7 +272,7 @@ void extract_bbo_data(const BBO &md, data::bbo_data &dd,
 void extract_bar_data(
     const Bar &md, data::bar_data &dd,
     std::unordered_map<uint16_t, data::delay_data> &delay_map) {
-  if (md.update_time < dd.server_ts) {
+  if (md.update_time <= dd.server_ts) {
     return;
   }
   dd.server_ts = md.update_time;
@@ -989,157 +1002,6 @@ get_currency_matching_insts(const data::currency &currency,
       matching_insts.push_back(IC.inst_str);
   }
   return matching_insts;
-}
-
-void update_orders_cost_sum(
-    std::unordered_map<data::currency, data::fetch_orders_data>
-        &fetch_orders_map_,
-    const data::InstrumentManager &InstManager_,
-    const std::unordered_map<data::currency, data::BalanceManager> &BlcMng_,
-    const Configs &CFG_) {
-  calculate_cost_transfer_sum(fetch_orders_map_, InstManager_, BlcMng_, false);
-  const auto &settings = CFG_.Strategy.setting;
-  for (auto &item : fetch_orders_map_) {
-    const auto &currency = item.first;
-    const auto &currency_str = data::get_currency_name(currency);
-    auto &cost_sum = item.second.cost_sum;
-    auto &transfer_sum = item.second.transfer_sum;
-    const auto &balance = BlcMng_.at(currency).balance_live;
-    const auto &balance_default = BlcMng_.at(currency).balance_default;
-    const auto &multi =
-        (sum_util::Find(CFG_.Strategy.Stable.digital_currencies, currency))
-            ? 1 - CFG_.Strategy.digital_position_thre
-            : 0.05;
-    if (cost_sum > 0 && balance - cost_sum < balance_default * multi) {
-      double transfer_factor =
-          std::max(0.0, (balance - balance_default * multi) / cost_sum);
-      auto &place_orders_dict = item.second.place_order_points_dict;
-      for (auto &item2 : place_orders_dict) {
-        const auto &id = item2.first;
-        auto *IC = InstManager_.FindByUniId(id);
-        const auto &quantity_size = IC->quantity_size;
-        for (auto &order : item2.second) {
-          order.quantity *= transfer_factor;
-        }
-        item2.second.erase(
-            std::remove_if(item2.second.begin(), item2.second.end(),
-                           [quantity_size](const data::order_data &order) {
-                             return order.quantity <= quantity_size * 10;
-                           }),
-            item2.second.end());
-      }
-    }
-    const auto &max_percentage = settings.at(currency).max_percentage + 1;
-    if (transfer_sum > 0 &&
-        balance + transfer_sum > balance_default * max_percentage) {
-      double transfer_factor = std::max(
-          0.0, (balance_default * max_percentage - balance) / transfer_sum);
-      for (auto &item3 : fetch_orders_map_)
-        if (item3.first != currency) {
-          auto &place_orders_dict = item3.second.place_order_points_dict;
-          for (auto &item4 : place_orders_dict) {
-            const auto &id = item4.first;
-            auto *IC = InstManager_.FindByUniId(id);
-            const auto &quantity_size = IC->quantity_size;
-            if (IC->base == currency || IC->quote == currency) {
-              for (auto &order : item4.second) {
-                double qty_tmp = order.quantity;
-                if (CFG_.Strategy.flexible_adjust) {
-                  const auto &vp = (IC->fp_bid + IC->fp_ask) * 0.5;
-                  const auto &limit_qty = CFG_.Strategy.Stable.limit_usd / vp;
-                  order.quantity =
-                      (order.quantity * transfer_factor < limit_qty)
-                          ? limit_qty
-                          : order.quantity * transfer_factor;
-                } else
-                  order.quantity *= transfer_factor;
-                INFO_FLOG(
-                    "[UpdateCost]transfer {} to {} too much, qty_before: {}, "
-                    "qty_after: {}",
-                    (IC->base == currency) ? IC->quote_str : IC->base_str,
-                    currency_str, qty_tmp, order.quantity);
-              }
-              item4.second.erase(
-                  std::remove_if(
-                      item4.second.begin(), item4.second.end(),
-                      [quantity_size](const data::order_data &order) {
-                        return order.quantity <= quantity_size * 10;
-                      }),
-                  item4.second.end());
-            }
-          }
-        }
-    }
-  }
-  calculate_cost_transfer_sum(fetch_orders_map_, InstManager_, BlcMng_, true);
-  for (auto &one : fetch_orders_map_) {
-    const auto &currency = one.first;
-    auto &transfer_sum = one.second.transfer_sum;
-    auto &cost_sum = one.second.cost_sum;
-    auto &rest_sum = one.second.rest_sum;
-    const auto &balance = BlcMng_.at(currency).balance_live;
-    one.second.rest_sum = std::max(0.0, balance - cost_sum);
-    const auto &max_percentage = settings.at(currency).max_percentage + 1;
-    DEBUG_FLOG("[UpdateCost]currency: {}, balance: {},transfer_sum: {}, "
-               "cost_sum: {}, rest_sum: {}, max_percentage: {}",
-               data::get_currency_name(currency), balance, transfer_sum,
-               cost_sum, rest_sum, max_percentage);
-  }
-}
-
-void calculate_cost_transfer_sum(
-    std::unordered_map<data::currency, data::fetch_orders_data>
-        &fetch_orders_map_,
-    const data::InstrumentManager &InstManager_,
-    const std::unordered_map<data::currency, data::BalanceManager> &BlcMng_,
-    bool verb1) {
-  for (auto &item : fetch_orders_map_) {
-    item.second.cost_sum = 0;
-    item.second.transfer_sum = 0;
-  }
-  for (auto &one : fetch_orders_map_) {
-    const auto &currency = one.first;
-    double &cost_sum = one.second.cost_sum;
-    auto &place_orders_dict = one.second.place_order_points_dict;
-    for (const auto &item : place_orders_dict) {
-      const auto &id = item.first;
-      const auto &place_orders = item.second;
-      auto *IC = InstManager_.FindByUniId(id);
-      const auto &inst_str = IC->inst_str;
-      for (const auto &order : place_orders) {
-        if (currency == IC->base) {
-          cost_sum += order.quantity;
-          fetch_orders_map_[IC->quote].transfer_sum +=
-              order.quantity * order.price;
-        } else if (currency == IC->quote) {
-          cost_sum += order.quantity * order.price;
-          fetch_orders_map_[IC->base].transfer_sum += order.quantity;
-        }
-        if (verb1) {
-          DEBUG_FLOG("[UpdateCost]currency: {}, inst: {}, qty: {}, price: {}",
-                     data::get_currency_name(currency), inst_str,
-                     order.quantity, order.price);
-        }
-      }
-    }
-  }
-  for (auto &one : fetch_orders_map_) {
-    const auto &currency = one.first;
-    one.second.rest_sum =
-        std::max(0.0, BlcMng_.at(currency).balance_live - one.second.cost_sum);
-  }
-}
-
-std::vector<std::string>
-load_factor_pool(const std::string &factor_pool_filepath) {
-  std::vector<std::string> pool;
-  std::ifstream file(factor_pool_filepath);
-  std::string factor;
-  while (std::getline(file, factor)) {
-    pool.push_back(factor);
-  }
-  file.close();
-  return pool;
 }
 
 double adjust_fair_price(
@@ -2366,160 +2228,6 @@ void print_fetch_orders_map(
     }
   }
   INFO_FLOG("==== fetch_orders_map_ 打印结束 ====");
-}
-
-// 读取ret.csv文件
-bool load_ret_csv(Configs &CFG_) {
-  try {
-    // 从CFG_.Strategy.Stable.Quote.backtest.begin_time提取日期
-    std::string date_str = "";
-    if (CFG_.Strategy.backtest && !CFG_.Quote.backtest.begin_time.empty()) {
-      // begin_time格式: "20250101.00:00:00" 或 "20250101 00:00:00"
-      const auto &time_split =
-          sum_util::StrSplit(CFG_.Quote.backtest.begin_time, '.');
-      if (time_split.size() >= 1) {
-        date_str = time_split[0];
-      } else {
-        // 如果没有点号，尝试按空格分割
-        const auto &space_split =
-            sum_util::StrSplit(CFG_.Quote.backtest.begin_time, ' ');
-        if (space_split.size() >= 1) {
-          date_str = space_split[0];
-        }
-      }
-    }
-
-    // 构建文件路径
-    std::string ret_csv_path;
-    if (!date_str.empty()) {
-      ret_csv_path = sum_util::JoinPath(CFG_.Strategy.Stable.root_dir,
-                                        fmt::format("ret_{}.csv", date_str));
-      INFO_FLOG("Using date-specific ret file: {}", ret_csv_path);
-    } else {
-      ret_csv_path =
-          sum_util::JoinPath(CFG_.Strategy.Stable.root_dir, "ret.csv");
-      INFO_FLOG("Using default ret file: {}", ret_csv_path);
-    }
-
-    if (sum_util::FileExists(ret_csv_path)) {
-      INFO_FLOG("Reading ret.csv file from: {}", ret_csv_path);
-
-      // 使用file_util.h中的ReadCsv函数读取CSV文件
-      auto csv_data =
-          sum_util::ReadCsv<std::string>(ret_csv_path, ',', true, false);
-
-      // 清空现有数据
-      CFG_.Strategy.ts_ret.clear();
-      CFG_.Strategy.rets.clear();
-
-      if (csv_data.empty()) {
-        WARNING_FLOG("CSV file is empty, skipping ret.csv reading");
-        return false;
-      }
-
-      // 获取列数
-      size_t num_columns = csv_data[0].size();
-      INFO_FLOG("CSV has {} columns", num_columns);
-
-      // 打印第一行数据（如果没有header）
-      INFO_FLOG("First row data:");
-      for (size_t i = 0; i < num_columns; ++i) {
-        INFO_FLOG("  Column {}: '{}'", i, csv_data[0][i]);
-      }
-
-      // 检查是否有足够的列（至少需要：time, timestamp,
-      // 以及至少一个currency列）
-      if (num_columns >= 3) {
-        // 为每个digital_currency初始化vector
-        for (const auto &currency : CFG_.Strategy.Stable.digital_currencies) {
-          CFG_.Strategy.rets[currency] = std::vector<double>();
-        }
-
-        // 解析数据行（跳过header行）
-        for (size_t row_idx = 1; row_idx < csv_data.size(); ++row_idx) {
-          const auto &row = csv_data[row_idx];
-
-          if (row.size() < num_columns) {
-            WARNING_FLOG("Row {} has insufficient columns, skipping", row_idx);
-            continue;
-          }
-
-          try {
-            // 解析timestamp列（第1列，索引0）
-            int64_t timestamp = std::stoll(row[0]);
-            CFG_.Strategy.ts_ret.push_back(timestamp);
-
-            // 解析每个digital_currency的ret值
-            for (const auto &currency :
-                 CFG_.Strategy.Stable.digital_currencies) {
-              std::string currency_name = data::get_currency_name(currency);
-              std::string column_name = fmt::format(
-                  "ret_{}t",
-                  sum_util::StrUpper(std::string_view(currency_name)));
-
-              // 查找对应的列
-              size_t col_idx = 0;
-              bool found = false;
-              for (size_t i = 0; i < num_columns; ++i) {
-                if (csv_data[0][i] == column_name) {
-                  col_idx = i;
-                  found = true;
-                  break;
-                }
-              }
-
-              if (found && col_idx < row.size()) {
-                double ret = std::stod(row[col_idx]);
-                CFG_.Strategy.rets[currency].push_back(ret);
-              } else {
-                // 如果找不到对应的列，填充0或跳过
-                WARNING_FLOG(
-                    "Column '{}' not found for currency {}, filling with 0",
-                    column_name, currency_name);
-                CFG_.Strategy.rets[currency].push_back(0.0);
-              }
-            }
-          } catch (const std::exception &e) {
-            WARNING_FLOG("Failed to parse row {}: {}, error: {}", row_idx,
-                         fmt::format("{}", fmt::join(row, ",")), e.what());
-            continue;
-          }
-        }
-
-        INFO_FLOG("Successfully loaded {} rows from ret.csv",
-                  CFG_.Strategy.ts_ret.size());
-        if (!CFG_.Strategy.ts_ret.empty()) {
-          INFO_FLOG("Timestamp range: {} to {}", CFG_.Strategy.ts_ret.front(),
-                    CFG_.Strategy.ts_ret.back());
-        }
-
-        // 显示加载的currency信息
-        INFO_FLOG("Loaded rets for {} currencies:", CFG_.Strategy.rets.size());
-        for (const auto &[currency, rets_vector] : CFG_.Strategy.rets) {
-          INFO_FLOG("  Currency: {}, Records: {}, Sample values: [{}, {}, {}]",
-                    data::get_currency_name(currency), rets_vector.size(),
-                    rets_vector.empty() ? 0.0 : rets_vector[0],
-                    rets_vector.size() > 1 ? rets_vector[1] : 0.0,
-                    rets_vector.size() > 2 ? rets_vector[2] : 0.0);
-        }
-        return true;
-      } else {
-        WARNING_FLOG("CSV file has insufficient columns ({}), skipping "
-                     "ret.csv reading",
-                     num_columns);
-        return false;
-      }
-    } else {
-      WARNING_FLOG("ret CSV file not found at: {}", ret_csv_path);
-      if (!date_str.empty()) {
-        WARNING_FLOG("Tried to load date-specific file: ret_{}.csv", date_str);
-      }
-      return false;
-    }
-  } catch (const std::exception &e) {
-    ERROR_FLOG("Failed to read ret.csv file: {}", e.what());
-    return false;
-  }
 }
 
 // 检查UTC时间是否在周五晚上22点到周日晚上22点之间

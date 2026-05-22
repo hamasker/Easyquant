@@ -2,55 +2,216 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## 构建与运行
+## 启动
 
-- **编译 C++（全量）：** `./compile.sh` — 清空 `build/`，执行 `cmake .. -DCMAKE_EXPORT_COMPILE_COMMANDS=ON`、`make -j32`，并把 `compile_commands.json` 复制回仓库根目录（clangd 需要）。C++20，gcc/g++，x86_64 下开启 `-mavx`。
-- **产物：** `lib/libTakingDemoD.so` — 由外部的 `SimTrade` 二进制作为策略插件加载。本仓库**没有**独立可执行程序。
-- **回测 / 实盘：** `./backtest.sh <N>` 会执行 `ext/coinsimulator/bin/SimTrade -f config/taking_all_multi<N>.json`，然后从日志里解析 `pnl static hedge:` / `trade usd:`，并根据 config 中 `Strategy.*` 字段拼出 tag 重命名日志文件。
-- **单元测试：** `test/test_runner`（由 `test/CMakeLists.txt` 构建，`add_test(NAME my_test COMMAND test_runner)`）。跑单个用例直接带参调用 `test/test_runner` — 这里没有接入 gtest，`test.cpp` 就是一个普通可执行程序。
-- **每日 pair-stats 刷新 + 同步到远端：** `python/daily_update_pair_stats_and_sync.sh [YYYYMMDD]` — 先用 `kraken/depth_lvn/<day>/` 是否存在做门禁（不传日期时还要求 mtime ≥ 当天 22:00），再 patch `config/daily_update.json` 里的 `Quote.backtest.begin_time/end_time`，跑 SimTrade，跑 `python/update_pair_configs_from_stats.py`，最后用 rsync 把 `config/pair_stats/` 同步到 `$REMOTE_DEST`。
+```bash
+cd /home/baser/Working/MX/Easyquant
+./compile.sh
 
-## 代码架构
+# 自动检测模式（从 config JSON 判断）
+./build/ext/coinsimulator/coinrunner -f config/mock_config.json      # mock
+./build/ext/coinsimulator/coinrunner -f config/prod_config.json       # prod
+./build/ext/coinsimulator/coinrunner -f config/backtest_config.json -d data.bin  # backtest
 
-本仓库是一个 C++ 做市 / 统计套利策略（`TakingDemo`），通过 `StrategyApi` 接口挂到外部交易框架（`NovaBase` / `NovaCoin2` / `coinsimulator`）上。它**不是独立应用** — `strategy/` 编出来的 `.so` 会由 `SimTrade` 通过 `-f` 指定的 config JSON 加载。
+# 已有数据
+/data/bin/backtest_binance_btcusdt_2025-12-02.bin   # 149MB, 756849条, 0.17s跑完
+```
 
-### 模块划分
+## 整体架构
 
-- `strategy/taking_all_multi.cpp` — 入口（`STRATEGY_API_IMPLEMENT(TakingDemo)`）。实现 `on_init`、`on_depth`、`on_trade`、`on_bbo`、订单回调、`on_reminder`。在其持有的 `InstrumentData` + `StrategyConfig` 之上构造 `FairPriceGenerator`、`OrderProcessor` 以及 `BalanceManager` map。头文件在 `include/taking_all_multi.h`。
-- `strategy/fair_price_generator.cpp`（+ `include/fair_price_generator.h`、`include/digital_fp_calculator.h`）— 从多交易所 depth/BBO 生成每个币种的 fair price。按币种族分发：USDT / USDC / USD / forex / digital（每个都有 `_old` 版本，由 config 的 `forex_method` / `digital_method` 选择）。结果写入以 `data::currency` 为 key 的 `fps_map_`。
-- `strategy/order_processor.cpp`（+ `include/order_processor.h`）— 取 snapshot、按币对算目标订单、对接 `TradeEngine`。读取 `fps_map`、`BlcMng_`（余额）、`InstData_.depth_map`/`order_map` 和 `CFG_`。
-- `strategy/data_process.cpp`（+ `include/data_process.h`）— 在 `NovaCoin*` 行情类型之上的工具层：交易所名归一化、按交易所格式化 pair 字符串、`extract_depth_data` / `extract_bbo_data` / `extract_bar_data` / `extract_trade_data` 转成 `data::depths_data`/`bbo_data`，以及模板的 `trunc_depth_data<N>` / `weighted_price_*`。
-- `src/` — 策略和测试共用的基础设施：`config_reloader.cpp`（监听 config 文件，见下面"日志级别行为"）、`config_watcher.cpp`、`markout.cpp`、`record.cpp`、`sum_util.cpp`。编成静态库 `relaxquant_src`，`test_*.cpp` 文件会被从库里排除。
-- `include/common/` — 领域类型（`data::currency`、`data::InstrumentData`、`depths_data`、`fair_price_data`、`order_data`、`BalanceManager`、`VolatilityMethod`、交易所 / 合约 enum）。`data.h` 是 strategy / order / fp 模块都要 include 的公共头。
-- `include/configs/strategy_config.h` — **策略参数的唯一事实源。** 字段通过 `STRATEGY_CONFIG_FIELDS(X)` X-macro 声明。加参数只需加一行 `X(name, type, default)` — 宏会同时生成结构体字段和 `cfg->GetItemValue("Strategy.<name>", ...)` 的 loader。`LoadStrategyConfig` 还会记录 JSON 里实际被读到的 key，这样没用上的 key 会以 warning 暴露出来。
-- `include/configs/pair_configs.h` + `config/pair_configs.yml` — 按 instrument 粒度的覆盖参数（ema_alpha、bid/ask bps 阈值、depth / s_bps 汇总分位数、fp_momentum_scale）。每天由 `config_reloader` 重新加载。
-- `ext/` — 外部依赖：`NovaBase`（base / tpl / fmt / json）、`NovaCoin2`（quote/trade/api/symbol_translator — `Depth`、`BBO`、`Trade`、`Bar`、`StrategyApi`、`OrderTp`、`SecurityPosition` 都在这里）、`coinsimulator`（提供 `SimTrade` 二进制和 `InstrumentBaseInfo.csv`）、`Hermes_Release`。
+```
+配置 JSON (三选一: mock/prod/backtest)
+  → StrategyRunner::Initialize()
+    → InitMockFramework() → InitConfig() → InitEngines() → InitStrategy() → InitFeed()
+  → Run() 主循环: Poll feeds → on_poll → ProcessReminders → yield
 
-### 运行时不变量
+三种模式:
+  mock:    WSFeed(真实行情) + MockTradeEngine(本地撮合)
+  backtest: MmapFeed(二进制回放) + MockTradeEngine(本地撮合)
+  prod:    WSFeed(真实行情) + 实盘引擎(KrakenTradeEngine等) + 必须配api_key
+```
 
-- `TakingDemo` 持有唯一的 `StrategyConfig CFG_`、`InstrumentData InstData_`、`fps_map_`（`currency → fair_price_data`）、`BlcMng_`（`currency → BalanceManager`）。`FairPriceGenerator` 和 `OrderProcessor` 构造时只持有这些对象的引用，自己不持有状态。
-- `StrategyApi` 的回调（`on_depth`/`on_trade`/`on_bbo`）是框架进入策略的唯一入口。后续一切动作都由 `StrategyConfig` 里的 `fp_interval`、`order_interval`、`vol_interval`、`negative_interval`、`rebalance_*` 这些节奏控制参数驱动。
-- 日志级别：`src/config_reloader.cpp` 在 init 时强制把**最大**日志级别钉到 TRACE，以便后续通过 config reload 打开 `TRACE`/`DEBUG`；**当前**级别跟随 `Server.Log.file_level`。背景见 `README_TRACE_DEBUG_LEVEL.md` / `README_TRACE_CONFIG_LEVEL.md`。
-- 策略把 `ext/coinsimulator/config/InstrumentBaseInfo.csv` 当作 instrument 目录使用 — JSON 里的 `BaseInfo.base_info_path` 必须指到它。
+## 配置结构
 
-### Include path 约定
+三个配置文件: `config/mock_config.json`, `config/prod_config.json`, `config/backtest_config.json`
 
-`strategy/CMakeLists.txt` 会 glob `include/` 下全部子目录、`ext/*/include`、`ext/*/*/include`，并额外显式加上 `ext/NovaCoin2/include/{api,quote,trade,symbol_translator}` 和 `ext/NovaBase/include/{base,tpl}`。仓库根目录的 `.clangd` 镜像了这些路径 — 新增 ext include 目录时两边都要加，否则即使编译通过，clangd 也会一片红。
+### Trade.TradeEngine (驱动模式选择)
 
-## Python 侧
+```json
+"Trade": {
+    "TradeEngine": [
+        {"name": "MockEngine", "match_delay_ms": 0, "match_fill_ratio": 100, "record_dir": ""},
+        // 或实盘引擎:
+        {"name": "KrakenSpotEngine", "front_address": "api.kraken.com", "ws_front_address": "wss://...",
+         "api_key": "", "api_secret": "", "ws_core": -1, "match_delay_ms": 50, "match_fill_ratio": 0}
+    ]
+}
+```
 
-`python/trade_prob/` 是研究 / FP 生成 / 参数调优流水线，给 C++ 策略喂数据；C++ 构建不会 import 它。整体流程（源自 `python/trade_prob/process.md`）：
+| name | 引擎类 | 用途 |
+|------|--------|------|
+| `MockEngine` | MockTradeEngine | 本地撮合 |
+| `KrakenSpotEngine` | KrakenTradeEngine | Kraken REST 实盘 |
+| `BinanceSpotEngine` | BinanceTradeEngine | Binance REST 实盘 |
+| `BinanceSwapEngine` | BinanceSwapTradeEngine | Binance 永续 |
+| `OKXSpotEngine` | OKXTradeEngine | OKX REST 实盘 |
+| `CoinbaseSpotEngine` | CoinbaseTradeEngine | Coinbase REST 实盘 |
 
-1. 在 Windows 上下载交易所原始数据（`prod_download.py`），再用 `csv_gz_to_parquet.py` 转换到 `/data/<exch>/{book_snapshot_N,trades,incremental}/` 的本地布局。
-2. `FairPriceGenerator`（命令行：`python -m trade_prob.FairPriceGenerator --from_date=... --to_date=... --type={usdt|usdc|forex|digital|merge|volume|eval}`）按天生成 FP parquet，落到 `python/trade_prob/output/fps_stable/`。`digital` 通常要加 `--no_multiprocess`。
-3. `optimize_fp.py` / `batch_optimize_fp.sh` 按 symbol 跑 Optuna 搜参；每个 symbol 的结果落到 `python/tune_runs/<PAIR>/results.jsonl` + `optuna_study_<PAIR>`。
-4. `eval_fp.py` / `eval_fp_baseline.py` 产出日度 / 滚动汇总，供 `log_analysis.ipynb` 消费。
-5. `update_pair_configs_from_stats.py` 把 `config/pair_stats/<inst>/rolling7days.csv` 转成 C++ 侧实际读取的 `config/pair_configs.yml`。
+模式自检规则: 全 MockEngine + Quote.backtest → backtest; 全 MockEngine + Quote.<exch>.enabled → mock; 有真实引擎 → prod; 混合 → 报错。
 
-`python/adjust_balance_allocation.py` 读写 `config/BalanceAllocation.yml`，策略 init 时会把它当作各币种起始余额加载。
+### Quote (数据源配置)
 
-## 值得一提的约定
+```json
+"Quote": {
+    "binance":   {"enabled": true, "channels": ["bookTicker"], "core": -1},
+    "binance_u": {"enabled": true, "channels": ["bookTicker"], "core": -1},
+    "kraken":    {"enabled": true, "channels": ["book","ticker"], "core": -1, "api_key":"", "api_secret":""},
+    "okex":      {"enabled": true, "channels": ["bbo-tbt"], "core": -1, "api_key":"", "api_secret":"", "api_passphrase":""},
+    "coinbase":  {"enabled": true, "channels": ["ticker"], "core": -1, "api_key":"", "api_secret":"", "api_passphrase":""},
+    "backtest":  {"begin_time": "...", "input_dirs": [...]}
+}
+```
 
-- 日志和录制的 CSV/parquet 都在 gitignore（`*.csv`、`*.parquet`、`*.log`、`python/trade_prob/output/`）。`build/` 和 `lib/` 下的构建产物也被忽略，但已签入的 `lib/libTakingDemoD.so` 例外。
-- 要加一个走 JSON config 的策略参数，改 `include/configs/strategy_config.h` 里的 `STRATEGY_CONFIG_FIELDS` — 不要手写 loader。
-- `taking_all_multi<N>.json` 的命名模式是 `backtest.sh` 选 config 的依据；新增 config 放在 `config/` 下，`N` 用位置参数传。
+ws_front_address 从 TradeEngine 配置透传，覆盖 WSFeed 硬编码 URL。
+
+## 数据引擎
+
+### WSFeed — 多交易所实时 WebSocket
+
+| 交易所 | config section | WS URL | 频道 | min间隔 |
+|--------|---------------|--------|------|:---:|
+| Binance spot | `binance` | `stream.binance.com:9443/ws` | bookTicker | **17μs** |
+| Binance swap | `binance_u` | `fstream.binance.com/ws` | bookTicker | **17μs** |
+| Kraken | `kraken` | `ws.kraken.com` | book depth=25 + ticker | **8μs** |
+| OKX | `okex` | `ws.okx.com:8443/ws/v5/public` | bbo-tbt | **11μs** |
+| Coinbase | `coinbase` | `ws-feed.exchange.coinbase.com` | ticker | **36μs** |
+
+**关键实现**: nvws IO 线程去掉 sleep → SSL_read 阻塞模型, min 到 8-36μs。
+每个 WSFeed 独立线程, 通过 `https_proxy` 走 HTTP CONNECT 隧道。
+
+### MmapBacktestFeed — 二进制回测
+
+Python 转换器: `python/convert_parquet_to_bin.py <exchange> <symbol> <YYYY-MM-DD>`
+格式: `[type:1B][ts:8B][inst_id:28B][depth:170B 或 trade:25B]`
+零拷贝 mmap, 1000条/批, 149MB 0.17s 跑完。
+
+### 数据处理
+
+- `on_datainfo` 在 WSFeed IO 线程 → 只做 `fetch_data` (μs级) → 立即返回
+- `on_poll` 在主循环 → 调 `do_calculations`
+- `md.update_time <= dd.server_ts` 去重
+- 20s 无数据自动发 ping 保活
+- 重连: 2s 失败重试, 10s 超时强制重连
+
+### Symbol 映射
+
+| 交易所 | MakeExchangeSymbol (订阅用) | ExtractSymbol (反向匹配) |
+|--------|---------------------------|-------------------------|
+| Binance | `ticker+currency` 小写, `btcusdt` | `data["s"]` |
+| Kraken | `TICKER/CURRENCY` 大写, `XBT/USD` | `data[3]` (pair名) |
+| OKX | `TICKER-CURRENCY` 大写, `BTC-USDT` | `data["arg"]["instId"]` |
+| Coinbase | `TICKER-CURRENCY` 大写, `BTC-USD` | `data["product_id"]` |
+
+## 交易引擎
+
+### MockTradeEngine (本地撮合)
+
+- **撮合规则**: 新单→先检查自成交(有则 reject)→外部BBO撮合
+- **对价成交**: `fill_qty = min(qty_left, BBO_size × match_fill_ratio/100)`, ratio=0 必须跨价
+- **跨价成交**: 全吃 BBO 量
+- **延迟**: `match_delay_ms` 控制, TryMatch 中检查 `now - accept_time < delay`
+- **手续费**: 成交额×0.1%
+- **仓位更新**: 买→long+, 卖→short+
+- **拒绝**: qty≤0, price≤0, 无效instrument, 自成交
+- **录制**: `record_dir` 设值 → 订单事件写 `orders.csv`
+
+### REST 实盘引擎
+
+基类 `RestTradeEngine` 提供 HTTPS POST + HMAC Sign + Base64。各交易所引擎:
+
+| 引擎 | API | 签名 |
+|------|-----|------|
+| KrakenTradeEngine | POST /0/private/AddOrder | HMAC-SHA512 b64 + nonce |
+| BinanceTradeEngine | POST /api/v3/order | HMAC-SHA256 hex |
+| BinanceSwapTradeEngine | POST /fapi/v1/order | HMAC-SHA256 hex |
+| OKXTradeEngine | POST /api/v5/trade/order | HMAC-SHA256 b64 + timestamp |
+| CoinbaseTradeEngine | POST /api/v3/brokerage/orders | HMAC-SHA256 hex |
+
+api_key 为空 → 退回 MockTradeEngine 本地撮合。prod 模式 + 空 → throw 拒绝启动。
+`front_address` 从 config 透传覆盖硬编码 host。Token bucket 限速 (`max_limit_rate` + `decay_rate_per_sec`)。
+
+### 订单回调
+
+| 回调 | 触发 |
+|------|------|
+| `on_order_accepted` | 通过拒单检查 |
+| `on_order_rejected` | qty≤0/price≤0/自成交 |
+| `on_order_update` | 部分成交 |
+| `on_order_done` | 完全成交 |
+| `on_order_cancelled` | 撤单成功 |
+| `on_order_cancel_failed` | 撤单失败(不在簿中) |
+
+## 策略核心 (待补)
+
+### 已有框架
+
+- `ModuleScheduler` — 4 模块独立节拍调度 (FP/Order/Negative/Disconnect)
+- `FairPriceGenerator` (header only) — 多币种 FP 计算接口
+- `OrderProcessor` (header only) — 订单生成接口
+- `data_process.cpp` — 辅助函数已齐全 (extract depth/bbo/trade, weighted price, prob, PnL)
+
+### 参考实现 (Relaxquant)
+
+`/home/baser/Working/MX/Relaxquant/strategy/`:
+- `fair_price_generator.cpp` (2237行) — 跨交易所 USDT/USDC/USD/forex/digital FP
+- `order_processor.cpp` (1124行) — 概率化量优化 + 保证金计算 + 订单生成
+
+### 需要补的
+
+1. **FairPriceGenerator.cpp** — 从 Relaxquant 移植, 修掉: 全局变量改成员、60s→5s stale、throw→return false、加 BBO fallback
+2. **OrderProcessor.cpp** — 移植, 修掉: 全局 bool 改成员、三遍 sift 合并
+3. **`do_calculations`** — 骨架 (调 scheduler 四个谓词)
+4. **`process_fp`** — `FPG.update(ts)`
+5. **`process_order`** — `OP.fetch_orders()` → SendOrder
+6. **`process_negative`** — 检查 `BlcMng_` 余额 + 敞口上限硬止损
+7. **`accumulate_turnover`** — 成交回调累加到 scheduler
+
+### 做市策略设计要点 (已讨论)
+
+- **Kraken 纯 maker**: spread 1-3bp + maker rebate 2bp → 毛利润 4-5bp, 被吃后不敢 taker 平(10bp 费差)
+- **FP 要精确不要预测**: 做市利润来自挂单被对手 maker 平仓的概率, 加方向偏移会降低成交率
+- **但需方向过滤器**: 盘口失衡 + taker buy/sell 比 + 多所价差 → 分类"现在多头是否安全", 不是预测价格
+- **敞口控制**: 偏移定价自动调节 + 硬止损上限 + 大行情前缩量
+- **下单规则**: FP 移动 > spread/2 全撤重挂, 成交后等 1-2s 再补, 单量按盘口深度成比例
+
+## 关键文件地图
+
+| 文件 | 职责 |
+|------|------|
+| `ext/coinsimulator/main.cpp` | 入口 |
+| `ext/coinsimulator/strategy_runner.h/cpp` | 策略生命周期, InitEngines/InitProdFeeds |
+| `ext/coinsimulator/feed/ws_feed.h/cpp` | 多交易所 WS, symbol映射, dispatch |
+| `ext/coinsimulator/feed/mmap_backtest_feed.h/cpp` | mmap 二进制回测 |
+| `ext/coinsimulator/mock/mock_trade_engine.h/cpp` | 本地撮合引擎 |
+| `ext/coinsimulator/mock/rest_trade_engine.h/cpp` | REST 引擎基类 |
+| `ext/coinsimulator/mock/kraken_trade_engine.h/cpp` | Kraken 实盘 |
+| `ext/coinsimulator/mock/exch_trade_engines.h/cpp` | Binance/OKX/Coinbase 实盘 |
+| `ext/coinsimulator/mock/strategy_api_impl.cpp` | CreateOrder/SendOrder/CancelOrder |
+| `ext/coinsimulator/coinrunner_log.h` | 日志宏重定向 |
+| `ext/NovaBase/src/nvws/ws_websocket_client.cpp` | 底层WS(独立线程/代理/绑核) |
+| `strategy/taking_all_multi.cpp` | 策略入口, on_datainfo/on_poll/subscribe |
+| `include/common/scheduler.h` | 模块调度器 |
+| `include/common/data.h` | 领域类型 |
+| `include/fair_price_generator.h` | FP 接口 (缺 cpp) |
+| `include/order_processor.h` | Order 接口 (缺 cpp) |
+| `include/taking_all_multi.h` | 策略类声明 |
+| `include/configs/strategy_config.h` | 策略参数 X-macro |
+| `python/convert_parquet_to_bin.py` | 数据格式转换器 |
+| `config/mock_config.json` / `prod_config.json` / `backtest_config.json` | 配置文件 |
+
+## 约定
+
+- 日志/CSV/parquet 均 gitignore, `lib/libTakingDemoD.so` 例外
+- 加 JSON 参数 → 改 `STRATEGY_CONFIG_FIELDS`
+- prod 模式依赖 `https_proxy` 环境变量
+- 加新交易所需改 6 处: MakeExchangeSymbol, ExtractSymbol, WSFeed::Initialize(URL), OnOpen(订阅), ProcessRawMessage(解析), DefaultChannelsForExchange

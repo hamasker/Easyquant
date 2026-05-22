@@ -11,11 +11,15 @@
 
 #define STABLE_CONFIG_FIELDS(X)                                                \
   X(aim_exchange, std::string, std::string("krk"))                             \
+  X(customer_balance, bool, false)                                             \
+  X(customer_usd, double, -1.0)                                                \
   X(limit_usd, double, 100.0)                                                  \
   X(negative_interval, double, 5.0)                                            \
-  X(fp_interval, double, 1.0)                                                  \
+  X(fp_turnover_usd, double, 5000.0)                                           \
+  X(order_turnover_usd, double, 10000.0)                                       \
+  X(fp_interval_max_ms, double, 1000.0)                                        \
+  X(order_interval_max_ms, double, 5000.0)                                     \
   X(vol_interval, double, 50.0)                                                \
-  X(order_interval, double, 8.0)                                               \
   X(reconnect_threshold, double, 30.0)                                         \
   X(bn_taker_fee, double, 0.000129375)                                         \
   X(cb_taker_fee, double, 0.00015)                                             \
@@ -48,7 +52,7 @@ inline void LoadStableConfig(const nova::base::Config *cfg, StableConfig &sc) {
   cfg->GetItemValue("Strategy.Base.root_dir", sc.root_dir);
   if (sc.root_dir.empty())
     throw std::runtime_error(
-        "Strategy.Base.root_dir is required but missing or empty in config!");
+        "Strategy.Base.root_dir (or Strategy.root_path) is required!");
   sc.config_dir = file_util::JoinPath(sc.root_dir, "config");
   const std::string cfg_file = cfg->config_file();
   if (!cfg_file.empty()) {
@@ -61,10 +65,9 @@ inline void LoadStableConfig(const nova::base::Config *cfg, StableConfig &sc) {
       file_util::JoinPath(sc.config_dir, "prob_params", "kraken");
   sc.balance_params_path = file_util::JoinPath(sc.config_dir, "Setting.yml");
   if (sum_util::IsDirectoryEmpty(sc.prob_params_dir))
-    throw std::runtime_error("Invalid Prob params directory: " +
-                             sc.prob_params_dir);
-  if (!file_util::FileExists(sc.balance_params_path))
-    throw std::runtime_error("Balance params file is not found: " +
+    throw std::runtime_error("Prob params dir is empty: " + sc.prob_params_dir);
+  if (!sum_util::FileExists(sc.balance_params_path))
+    throw std::runtime_error("Balance params not found: " +
                              sc.balance_params_path);
 
     // ******** JSON 可选字段 (X-macro 自动展开, 必须在使用这些字段之前)

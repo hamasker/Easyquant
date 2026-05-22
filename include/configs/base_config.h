@@ -42,7 +42,7 @@ struct TradeExecutorConfig {
   double priority_qty = 0.0;
   int delay_ms = 0;
   int check_position = 0;
-  int depth_trade_factor = 0;
+  double depth_trade_factor = 0;
   std::string amend_mode;
 };
 
@@ -122,7 +122,7 @@ inline void LoadTradeConfig(const nova::base::Config *cfg, TradeConfig &tc) {
   GetItemValueWithDefault(cfg, "Trade.executor.check_position",
                           tc.executor.check_position, 0);
   GetItemValueWithDefault(cfg, "Trade.executor.depth_trade_factor",
-                          tc.executor.depth_trade_factor, 0);
+                          tc.executor.depth_trade_factor, 0.0);
   GetItemValueWithDefault(cfg, "Trade.executor.amend_mode",
                           tc.executor.amend_mode, std::string(""));
   // krk_param

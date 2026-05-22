@@ -13,7 +13,11 @@
   X(cuscore, bool, false)                                                      \
   X(ob, bool, false)                                                           \
   X(delay, bool, false)                                                        \
-  X(ts_ret, std::vector<int64_t>, {})
+  X(process_orders, bool, false)                                               \
+  X(module, bool, false)                                                       \
+  X(tfi, bool, false)                                                          \
+  X(order_currency, std::string, std::string(""))                              \
+  X(fp_currency, std::string, std::string(""))
 
 struct VerboseConfig {
 #define DECL_FIELD(name, type, def_val) type name = def_val;
@@ -32,13 +36,13 @@ inline void LoadVerboseConfig(const nova::base::Config *cfg,
 // =============== Strategy.Cuscore.* ================================
 
 #define CUSCORE_CONFIG_FIELDS(X)                                               \
-  X(flag_cuscore, bool, false)                                                 \
-  X(span_slow, int, 0)                                                         \
-  X(span_fast, int, 0)                                                         \
-  X(span_mid, int, 0)                                                          \
-  X(threshold_slow, int, 0)                                                    \
-  X(threshold_fast, int, 0)                                                    \
-  X(threshold_mid, int, 0)
+  X(enable, bool, false)                                                       \
+  X(threshold_slow, double, 1.0)                                               \
+  X(threshold_fast, double, 1.0)                                               \
+  X(threshold_mid, double, 1.0)                                                \
+  X(span_slow, int, 54000)                                                     \
+  X(span_fast, int, 9000)                                                      \
+  X(span_mid, int, 900)
 
 struct CuscoreConfig {
 #define DECL_FIELD(name, type, def_val) type name = def_val;
@@ -57,13 +61,13 @@ inline void LoadCuscoreConfig(const nova::base::Config *cfg,
 // =============== Strategy.Volatility.* ================================
 
 #define VOLATILITY_CONFIG_FIELDS(X)                                            \
-  X(volatility_method, std::string, "fp_diff_shared")                          \
-  X(vol_interval, int, 0)                                                      \
-  X(vol_multi_base, int, 0)                                                    \
-  X(vol_multi, double, 0.0)                                                    \
-  X(rebalance, bool, false)                                                    \
-  X(adjust_only, bool, false)                                                  \
-  X(flag_ib, bool, false)
+  X(method_str, std::string, "fp_diff_shared")                                 \
+  X(multi, double, 0.8)                                                        \
+  X(multi_base, double, 0.0)                                                   \
+  X(multi_shrink_ratio, double, 0.0)                                           \
+  X(ts_threshold, double, -1.0)                                                \
+  X(ts_threshold_base, double, 10000.0)                                        \
+  X(flexible_threshold, bool, false)
 
 struct VolatilityConfig {
 #define DECL_FIELD(name, type, def_val) type name = def_val;
@@ -81,8 +85,17 @@ inline void LoadVolatilityConfig(const nova::base::Config *cfg,
 
 // =============== Strategy.Taker.* ================================
 #define TAKER_CONFIG_FIELDS(X)                                                 \
-  X(flag_prod, bool, false)                                                    \
-  X(ts_ret, std::vector<int64_t>, {})
+  X(enable, bool, false)                                                       \
+  X(verbose_mode, bool, false)                                                 \
+  X(deviation_trigger_pct, double, 50.0)                                       \
+  X(deviation_target_pct, double, 30.0)                                        \
+  X(min_action_qty_pct, double, 5.0)                                           \
+  X(topbook_take_ratio, double, 0.3)                                           \
+  X(slip_vol_k, double, 2.0)                                                   \
+  X(slip_min_bps, double, 5.0)                                                 \
+  X(same_side_cooldown_ms, int, 1000)                                          \
+  X(pending_timeout_ms, int, 2000)                                             \
+  X(profit_take_bps, double, 0.0)
 
 struct TakerConfig {
 #define DECL_FIELD(name, type, def_val) type name = def_val;
@@ -97,20 +110,37 @@ inline void LoadTakerConfig(const nova::base::Config *cfg, TakerConfig &tc) {
 #undef LOAD_FIELD
 }
 
+// =============== Strategy.Order.* ================================
+#define ORDER_CONFIG_FIELDS(X)                                                 \
+  X(holding_time_s, double, 60.0)                                              \
+  X(threshold_margin, double, 0.0)
+
+struct OrderConfig {
+#define DECL_FIELD(name, type, def_val) type name = def_val;
+  ORDER_CONFIG_FIELDS(DECL_FIELD)
+#undef DECL_FIELD
+};
+
+inline void LoadOrderConfig(const nova::base::Config *cfg, OrderConfig &oc) {
+#define LOAD_FIELD(name, type, def_val)                                        \
+  cfg->GetItemValue("Strategy.Order." #name, oc.name);
+  ORDER_CONFIG_FIELDS(LOAD_FIELD)
+#undef LOAD_FIELD
+}
+
 // =============== Strategy.* - 顶层旋钮 ================================
 #define STRATEGY_CONFIG_FIELDS(X)                                              \
-  X(flag_prod, bool, false)                                                    \
-  X(recover_usd, double, -1.0)                                                 \
-  X(test_mode, bool, false)                                                    \
-  X(digital_position_thre, double, 0.5)                                        \
-  X(flexible_adjust, bool, false)                                              \
   X(flag_ib, bool, false)                                                      \
+  X(flag_prod, bool, false)                                                    \
   X(backtest, bool, false)                                                     \
   X(customer_balance, bool, false)                                             \
-  X(ts_ret, std::vector<int64_t>, {})
+  X(recover_usd, double, -1.0)                                                 \
+  X(digital_position_thre, double, 0.0)                                        \
+  X(flexible_adjust, bool, false)
 
 struct StrategyBlock {
   StableConfig Stable;
+  OrderConfig Order;
   TakerConfig Taker;
   VolatilityConfig Volatility;
   CuscoreConfig Cuscore;
@@ -122,12 +152,12 @@ struct StrategyBlock {
 #undef DECL_FIELD
 
   // 派生 / 运行时 (不来自 JSON)
-  double multi_order_vol = 1;
   std::unordered_map<data::currency, data::Setting> setting;
   PairConfigs pair_configs;
   data::CuscoreParams cuscore_params;
   std::vector<std::string> available_forex;
   std::unordered_map<data::currency, std::vector<double>> rets;
+  std::vector<double> ts_ret; // 时序收益率缓存
 };
 
 inline void LoadStrategyBlock(const nova::base::Config *cfg,
@@ -144,10 +174,12 @@ inline void LoadStrategyBlock(const nova::base::Config *cfg,
   }
   STRATEGY_CONFIG_FIELDS(LOAD_FIELD)
 #undef LOAD_FIELD
-  // 检查所有字段是否都被读取到
+  // 检查所有字段是否都被读取到 (缺失则用默认值并警告)
 #define CHECK_FIELD(name, type, def_val)                                       \
   if (read_keys.find(#name) == read_keys.end()) {                              \
-    throw std::runtime_error(std::string("Config field not found: ") + #name); \
+    WARNING_FLOG("[StrategyConfig] Config field not found: Strategy.{}, "      \
+                 "using default",                                              \
+                 #name);                                                       \
   }
   STRATEGY_CONFIG_FIELDS(CHECK_FIELD)
 #undef CHECK_FIELD
@@ -155,6 +187,7 @@ inline void LoadStrategyBlock(const nova::base::Config *cfg,
 
   // ******** 5 个子块 *********
   LoadStableConfig(cfg, sb.Stable);
+  LoadOrderConfig(cfg, sb.Order);
   LoadVolatilityConfig(cfg, sb.Volatility);
   LoadCuscoreConfig(cfg, sb.Cuscore);
   LoadVerboseConfig(cfg, sb.Verbose);
@@ -162,7 +195,8 @@ inline void LoadStrategyBlock(const nova::base::Config *cfg,
 
   LoadPairConfigs(sb.Stable.pair_configs_path, sb.pair_configs);
 
-  sb.multi_order_vol = sb.Stable.order_interval * 1000 / sb.Stable.vol_interval;
+  // sb.multi_order_vol = sb.Stable.order_interval * 1000 /
+  // sb.Stable.vol_interval;
 
   ryml::Tree setting_tree;
   auto setting_root =
@@ -170,9 +204,9 @@ inline void LoadStrategyBlock(const nova::base::Config *cfg,
   INFO_FLOG("[OnInit]Got Setting config from: {}",
             sb.Stable.balance_params_path);
   sb.setting = data::LoadSettingMap(setting_root, sb.Stable.trading_currencies);
-  if (sb.test_mode) {
-    sum_util::PrintYamlNode(setting_root);
-  }
+  // if (sb.test_mode) {
+  //   sum_util::PrintYamlNode(setting_root);
+  // }
   // cuscore参数
   // auto &cp = sb.Cuscore.cuscore_params;
   // cp.flag_cuscore = sc.flag_cuscore;

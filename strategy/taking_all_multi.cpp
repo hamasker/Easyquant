@@ -9,21 +9,27 @@
 #include "trade/trade_server.h"
 
 STRATEGY_API_IMPLEMENT(TakingDemo)
+
 /************************************init*****************************************/
 bool TakingDemo::on_init(const Config *cfg) {
-  auto ts = sum_util::GetCurrentBeijingTimestampNs();
   /*
-  ! Load Setting Configs
+  ! Load Configs
   */
+  auto ts = sum_util::GetCurrentBeijingTimestampNs();
   LoadConfigs(cfg, CFG_);
-  // ********* Start config auto-reload for log level *********
+  INFO_FLOG(
+      "[OnInit]path: {}, root_path: {}, config_file_path: {}, "
+      "pair_configs_path: {}, prob_params_dir: {}, balance_params_path: {}",
+      cfg->config_file(), CFG_.Strategy.Stable.root_dir,
+      CFG_.Strategy.Stable.config_file_path,
+      CFG_.Strategy.Stable.pair_configs_path,
+      CFG_.Strategy.Stable.prob_params_dir,
+      CFG_.Strategy.Stable.balance_params_path);
+  // ********* Config auto-reload for log level *********
   config_reloader_ = std::make_unique<nova::config::ConfigReloader>();
   if (!config_reloader_->StartAutoReload(
           CFG_.Strategy.Stable.config_file_path)) {
-    WARNING_FLOG("[OnInit][{}]Failed to start config auto-reload, log level "
-                 "changes will "
-                 "not be applied automatically",
-                 ts);
+    WARNING_FLOG("[OnInit][{}]Failed to start config auto-reload", ts);
   } else {
     INFO_FLOG("[OnInit][{}]Config auto-reload started successfully for: {}", ts,
               CFG_.Strategy.Stable.config_file_path);
@@ -34,46 +40,37 @@ bool TakingDemo::on_init(const Config *cfg) {
     if (config_reloader_) {
       config_reloader_->ManualReloadWithRealLevel(
           CFG_.Server.Log.file_level_real);
-      INFO_FLOG(
-          "[OnInit][{}]Switched to real log level: {} after initialization", ts,
-          CFG_.Server.Log.file_level_real);
-
-      // 记录日志级别设置信息
-      INFO_FLOG("[OnInit][{}]Log level configuration:", ts);
-      INFO_FLOG("[OnInit][{}]  - Global log level set to: {}", ts,
+      INFO_FLOG("[OnInit][{}]Switched to real log level: {}", ts,
                 CFG_.Server.Log.file_level_real);
-      INFO_FLOG("[OnInit][{}]  - All threads will use this level automatically",
-                ts);
     }
   } else {
-    WARNING_FLOG("[OnInit][{}]Server.Log.file_level_real is empty, using "
-                 "default log level",
-                 ts);
+    WARNING_FLOG(
+        "[OnInit][{}]Server.Log.file_level_real is empty, using default", ts);
   }
   /*
-  ! Initialize instruments
+  ! Initialize Instruments
   */
   get_trade_engine();
-  INFO_FLOG("[OnInit][{}]Got {} swap instruments from config", ts,
+  INFO_FLOG("[OnInit] subscribe {} swaps...",
             CFG_.Strategy.Stable.instruments_swap.size());
   if (CFG_.Strategy.Stable.instruments_swap.empty())
     throw std::runtime_error("Invalid instruments_swap config!");
-  for (auto &inst_swap_str : CFG_.Strategy.Stable.instruments_swap) {
+  for (const auto &inst_swap_str : CFG_.Strategy.Stable.instruments_swap) {
     subscribe_instruments(inst_swap_str, false);
   }
-  INFO_FLOG("[OnInit][{}]Got {} spot instruments from config", ts,
+  INFO_FLOG("[OnInit] subscribe {} spots...",
             CFG_.Strategy.Stable.instruments.size());
   if (CFG_.Strategy.Stable.instruments.empty())
     throw std::runtime_error("Invalid instruments_spot config!");
-  for (auto &inst_str : CFG_.Strategy.Stable.instruments) {
+  for (const auto &inst_str : CFG_.Strategy.Stable.instruments) {
     subscribe_instruments(inst_str, true);
   }
   /*
-  ! Init Variables
+  ! Initialize Variables
   */
   init_global_variables();
   /*
-  ! Read balances / positions
+  ! Read Balances / Positions
   */
   get_assets();
   for (auto &c : CFG_.Strategy.Stable.trading_currencies) {
@@ -85,36 +82,158 @@ bool TakingDemo::on_init(const Config *cfg) {
     // 获取实际仓位 prod从engine获取 其余从Setting.yml
     if (CFG_.Strategy.flag_prod)
       BlcMng_[c].balance_live = BlcMng_[c].balance_query;
-    else if (CFG_.Strategy.customer_balance)
+    else if (CFG_.Strategy.Stable.customer_balance)
       BlcMng_[c].balance_live = CFG_.Strategy.setting.at(c).customer_balance;
     else
       BlcMng_[c].balance_live = balance_setting;
     INFO_FLOG("[OnInit][{}]Fetched {} balance_init: {}", ts,
               data::get_currency_name(c), BlcMng_[c].balance_live);
   }
-  if (CFG_.Strategy.flag_prod && CFG_.Strategy.recover_usd != -1) {
-    INFO_FLOG("[OnInit][{}]Not used whole USD, set to {} from {}", ts,
-              CFG_.Strategy.recover_usd,
-              BlcMng_[data::currency::USD].balance_live);
-    BlcMng_[data::currency::USD].balance_live = CFG_.Strategy.recover_usd;
+  if (CFG_.Strategy.flag_prod && CFG_.Strategy.Stable.customer_usd != -1) {
+    INFO_FLOG("[OnInit][{}]Override USD balance from {} to {}", ts,
+              BlcMng_[data::currency::USD].balance_live,
+              CFG_.Strategy.Stable.customer_usd);
+    BlcMng_[data::currency::USD].balance_live =
+        CFG_.Strategy.Stable.customer_usd;
   }
   /*
-  ! Subscribe instruments
+  ! Subscribe Instruments
   */
   if (!(last_data_info = this->SubDataInfo(subs))) {
     ERROR_LOG("[OnInit]Sub quote failed");
     return false;
   }
-  INFO_LOG("[OnInit]Sub quote success");
+  INFO_FLOG("[OnInit]Sub quote success");
+  scheduler_.init(CFG_.Strategy.Stable.negative_interval,
+                  CFG_.Strategy.Stable.fp_turnover_usd,
+                  CFG_.Strategy.Stable.order_turnover_usd,
+                  CFG_.Strategy.Stable.fp_interval_max_ms,
+                  CFG_.Strategy.Stable.order_interval_max_ms, ts);
   return true;
 }
 
 void TakingDemo::on_stop() { INFO_FLOG("[OnStop]Stopping strategy"); }
 
-void TakingDemo::on_datainfo(const DataInfoManager *, int32_t,
-                             const SecurityPosition *) {}
+void TakingDemo::on_datainfo(const DataInfoManager *datainfo, int32_t di,
+                             const SecurityPosition *position) {
+  if (!datainfo) {
+    ERROR_FLOG("[OnDatainfo]undefined datainfo");
+    return;
+  }
+  /*
+  ! 读取检查数据
+  */
+  if (CFG_.Strategy.Verbose.ob && scheduler_.flag_first)
+    DEBUG_FLOG("before fetch data, depth_map size: {}, bbo_map size: {}, "
+               "trade_map size: {}",
+               InstData_.depth_map.size(), InstData_.bbo_map.size(),
+               InstData_.trade_map.size());
+  const auto &one = datainfo->datainfo().at(di);
+  scheduler_.new_data_count_++;
+  scheduler_.flag_data_ready =
+      DataProcess::fetch_data(one, InstData_, scheduler_.flag_data_ready, CFG_);
+  // 更新 global_ts
+  auto quote_type = one.quote_type();
+  if (quote_type == NOVA_COIN_QUOTE_BBO) {
+    const auto &data = *static_cast<const BBO *>(one.buffer().back());
+    global_ts = data.local_time;
+  } else if (quote_type == NOVA_COIN_QUOTE_BAR) {
+    const auto &data = *static_cast<const Bar *>(one.buffer().back());
+    global_ts = data.local_time;
+  } else if (quote_type == NOVA_COIN_QUOTE_DEPTH) {
 
-void TakingDemo::on_reminder(void *, uint64_t) {}
+    const auto &data = *static_cast<const Depth *>(one.buffer().back());
+    global_ts = data.local_time;
+  } else if (quote_type == NOVA_COIN_QUOTE_DEPTH_LVN) {
+
+    const auto &data = *static_cast<const DepthLVN *>(one.buffer().back());
+    global_ts = data.local_time;
+  } else if (quote_type == NOVA_COIN_QUOTE_TRADE) {
+    const auto *trade = static_cast<const Trade *>(one.buffer().back());
+    global_ts = trade->local_time;
+    // turnover 累加
+    auto it = InstData_.IM.inststr2id_.find(trade->instrument_id.symbol);
+    if (it != InstData_.IM.inststr2id_.end()) {
+      auto *IC = InstData_.IM.FindByUniId(it->second);
+      if (IC)
+        accumulate_turnover(*IC, trade->price, trade->qty);
+    }
+  }
+  if (scheduler_.flag_first) {
+    INFO_FLOG("[OnStrategy]trigger on_datainfo success {}",
+              position->instrument.symbol);
+    scheduler_.flag_first = false;
+    AddReminder(global_ts + 10'000'000, nullptr);
+    // 在第一次数据触发时再次设置日志级别, 确保新创建的线程都使用统一级别
+    if (!CFG_.Server.Log.file_level_real.empty() && config_reloader_) {
+      config_reloader_->ManualReloadWithRealLevel(
+          CFG_.Server.Log.file_level_real);
+      INFO_FLOG("Re-applied log level {} at first data trigger",
+                CFG_.Server.Log.file_level_real);
+    }
+  }
+}
+
+void TakingDemo::on_reminder(void *, uint64_t cur_ns) {
+  do_calculations(static_cast<int64_t>(cur_ns));
+  AddReminder(cur_ns + 10'000'000, nullptr); // 10ms 后再次触发
+}
+
+void TakingDemo::on_poll(int64_t /*ts*/) {
+  if (scheduler_.new_data_count_ > 0) {
+    scheduler_.new_data_count_ = 0;
+    do_calculations(global_ts);
+  }
+}
+
+void TakingDemo::do_calculations(int64_t current_ts) {
+  // * 检测数据完备
+  if (!scheduler_.flag_data_ready)
+    return;
+  InstData_.global_ts = current_ts;
+  // * 检测断连
+  if (scheduler_.should_disconnect(current_ts)) {
+    process_disconnect(current_ts);
+    scheduler_.mark_disconnect(current_ts);
+    return;
+  }
+  // * 撤负收益
+  if (scheduler_.should_negative(current_ts)) {
+    process_negative(current_ts);
+    scheduler_.mark_negative(current_ts);
+    return;
+  }
+  // * 计算fair price
+  if (scheduler_.should_fp(current_ts)) {
+    process_fp(current_ts);
+    scheduler_.mark_fp(current_ts);
+  }
+  // * 生成订单
+  if (scheduler_.should_order(current_ts)) {
+    process_order(current_ts);
+    scheduler_.mark_order(current_ts);
+  }
+}
+
+void TakingDemo::process_disconnect(int64_t) {}
+void TakingDemo::process_negative(int64_t) {}
+void TakingDemo::process_fp(int64_t) {
+  // TODO: fpg_.update(ts)
+}
+void TakingDemo::process_order(int64_t) {
+  // TODO: OP.fetch_orders() → SendOrder
+}
+
+void TakingDemo::accumulate_turnover(const data::InstrumentComponent &IC,
+                                     double price, double qty) {
+  if (!DataProcess::is_main_exchange(IC.inst_str,
+                                     CFG_.Strategy.Stable.aim_exchange))
+    return;
+  const auto &q = IC.quote_str;
+  if (q != "usd" && q != "usdt" && q != "usdc")
+    return;
+  scheduler_.add_turnover(price * qty);
+}
 
 void TakingDemo::get_trade_engine() {
   if (engine_aim == nullptr) {
@@ -136,11 +255,14 @@ void TakingDemo::init_global_variables() {
     volumes_.emplace(c, data::volume_data());
   }
   for (auto &forex : constant::FOREX) {
-    const auto &ib_inst = fmt::format("{}_usd_cash.idealpro", forex);
-    const auto &id_ib_inst = InstData_.IM.inststr2id_[ib_inst];
-    if (sum_util::Find(InstData_.bbo_map, id_ib_inst))
+    const auto &Cusd_inst = DataProcess::format_main_exchange_usd_pair(
+        forex, CFG_.Strategy.Stable.aim_exchange);
+    const auto &id_Cusd_inst = InstData_.IM.inststr2id_[Cusd_inst];
+    if (sum_util::Find(InstData_.depth_map, id_Cusd_inst))
       CFG_.Strategy.available_forex.push_back(forex);
   }
+  INFO_FLOG("Initialized available forex: {}",
+            sum_util::ToString(CFG_.Strategy.available_forex));
   for (auto &item : InstData_.depth_map) {
     auto &id = item.first;
     auto *IC = InstData_.IM.FindByUniId(id);
@@ -184,9 +306,10 @@ void TakingDemo::get_assets() {
 
 void TakingDemo::subscribe_instruments(std::string inst_str, bool sub_spot) {
   // ! 1. Set init variables
-  if (!CFG_.Strategy.flag_ib && sum_util::EndsWith(inst_str, "idealpro"))
+  if (!CFG_.Strategy.flag_ib && sum_util::EndsWith(inst_str, "idealpro")) {
+    INFO_FLOG("[SubInst] {} skip (idealpro)", inst_str);
     return;
-  INFO_FLOG("[SubInst]inst: {}", inst_str);
+  }
   auto type_str = sub_spot ? "spot" : "swap";
   auto inst_id = InstrumentId::Create(inst_str);
   inst_str = inst_id.GetSymbol();
@@ -203,25 +326,18 @@ void TakingDemo::subscribe_instruments(std::string inst_str, bool sub_spot) {
     ERROR_FLOG("[SubInst]{} inst {} repeat!", type_str, inst_str);
     return;
   }
-  INFO_FLOG("[SubInst]IC initialized: {} {} {} {}", IC_tmp.uni_id,
-            IC_tmp.inst_str, IC_tmp.base_str, IC_tmp.quote_str);
   InstData_.IM.Insert(IC_tmp);
   auto *IC = InstData_.IM.FindByUniId(IC_tmp.uni_id);
-  // ! 2. Initialize delay_map for this exchange+inst_type if not exists
   auto delay_key =
       data::delay_data::make_key(inst_id.exchange, inst_id.inst_type);
   if (InstData_.delay_map.find(delay_key) == InstData_.delay_map.end()) {
     InstData_.delay_map[delay_key] = data::delay_data();
     InstData_.delay_map[delay_key].verbose = CFG_.Strategy.Verbose.delay;
-    INFO_FLOG("[SubInst]Initialized delay_map for exchange: {}, inst_type: {}",
-              exch_str, GetCoinInstTypeString(inst_id.inst_type));
   }
-  // ! 3. Init hedge positions
   auto *posi = CreateSecurityPosition(inst_id);
   if (sub_spot) {
     ChangePositionToSingleSide(posi);
   } else {
-    // swap需要获取long/short仓位来更新posi
     auto *acc_pos = this->GetAccountPosition(inst_id);
     account_position_ = acc_pos;
     if (CFG_.Strategy.flag_prod) {
@@ -232,7 +348,12 @@ void TakingDemo::subscribe_instruments(std::string inst_str, bool sub_spot) {
     } else {
       const auto &base = IC->base;
       posi->long_position = acc_pos->long_position;
-      posi->short_position = CFG_.Strategy.setting.at(base).balance_quantity;
+      auto it = CFG_.Strategy.setting.find(base);
+      if (it == CFG_.Strategy.setting.end()) {
+        posi->short_position = 0;
+      } else {
+        posi->short_position = it->second.balance_quantity;
+      }
       hedge_positions_[IC->base].size = posi->short_position;
     }
     // InstData_.order_map.emplace(IC->uni_id, data::OrderManager{inst_id,
@@ -266,8 +387,9 @@ void TakingDemo::subscribe_instruments(std::string inst_str, bool sub_spot) {
             PC.depth5_summary_percentile_bid, PC.depth5_summary_percentile_ask,
             PC.depth5_thr_bid, PC.depth5_thr_ask);
   subs.emplace_back(SubTopic{posi, depth_type, true});
-  INFO_FLOG("[SubInst]{} {} subscribed Depth/DepthLVN (id: {})", type_str,
-            inst_str, IC->uni_id);
+  INFO_FLOG("[SubInst]{} {} subscribed {} (id: {})", type_str, inst_str,
+            depth_type == NOVA_COIN_QUOTE_DEPTH_LVN ? "DepthLVN" : "Depth",
+            IC->uni_id);
   if (DataProcess::is_main_exchange(inst_str,
                                     CFG_.Strategy.Stable.aim_exchange)) {
     // * initilize rate_limit / vol_map / order_map
@@ -275,9 +397,6 @@ void TakingDemo::subscribe_instruments(std::string inst_str, bool sub_spot) {
       IC->rate_limit = engine_aim->GetRateLimit(inst_str);
     else
       IC->rate_limit = 225;
-    INFO_FLOG("[SubInst]{} {} taker_fee: {}, rate_limit: {}", type_str,
-              inst_str, InstData_.depth_map[IC->uni_id].taker_fee,
-              IC->rate_limit);
     InstData_.vol_map[IC->uni_id] = data::vol_data();
     InstData_.insert_order_map.emplace(IC->uni_id, data::insert_orders_data());
     InstData_.order_map.emplace(IC->uni_id, data::OrderManager{inst_id, posi});
@@ -302,6 +421,7 @@ void TakingDemo::subscribe_instruments(std::string inst_str, bool sub_spot) {
             InstData_.depth_map.size(), InstData_.bbo_map.size(),
             InstData_.vol_map.size(), InstData_.trade_map.size(),
             InstData_.order_map.size(), InstData_.swap_order_map.size());
+  INFO_FLOG("[SubInst] {} {} done", inst_str, sub_spot ? "spot" : "swap");
 }
 
 /******************************** quote *********************************/
@@ -312,23 +432,45 @@ void TakingDemo::on_trade(const Trade *, const SecurityPosition *) {}
 void TakingDemo::on_bbo(const BBO *, const SecurityPosition *) {}
 
 /****************************** order & trade******************************/
-void TakingDemo::on_order_update(const StrategyApi::OrderTp *,
-                                 const SecurityPosition *) {}
+void TakingDemo::on_order_update(const StrategyApi::OrderTp *order,
+                                 const SecurityPosition *) {
+  INFO_FLOG("[Strategy] on_order_update: qty={} filled={} left={}",
+            order ? order->order.quantity : 0, order ? order->qty_traded : 0,
+            order ? order->qty_left : 0);
+}
 
-void TakingDemo::on_order_cancelled(const StrategyApi::OrderTp *,
-                                    const SecurityPosition *, double) {}
+void TakingDemo::on_order_cancelled(const StrategyApi::OrderTp *order,
+                                    const SecurityPosition *, double left) {
+  INFO_FLOG("[Strategy] on_order_cancelled: qty={} left={}",
+            order ? order->order.quantity : 0, left);
+}
 
-void TakingDemo::on_order_cancel_failed(const StrategyApi::OrderTp *,
-                                        const SecurityPosition *, int32_t) {}
+void TakingDemo::on_order_cancel_failed(const StrategyApi::OrderTp *order,
+                                        const SecurityPosition *,
+                                        int32_t reason) {
+  INFO_FLOG("[Strategy] on_order_cancel_failed: id={} reason={}",
+            order ? order->nova_id.sequence : 0, reason);
+}
 
-void TakingDemo::on_order_rejected(const StrategyApi::OrderTp *,
-                                   const SecurityPosition *, int32_t) {}
+void TakingDemo::on_order_rejected(const StrategyApi::OrderTp *order,
+                                   const SecurityPosition *, int32_t reason) {
+  INFO_FLOG("[Strategy] on_order_rejected: qty={} price={} reason={}",
+            order ? order->order.quantity : 0, order ? order->order.price : 0,
+            reason);
+}
 
-void TakingDemo::on_order_done(const StrategyApi::OrderTp *,
-                               const SecurityPosition *, NOVA_ORDER_STATUS) {}
+void TakingDemo::on_order_done(const StrategyApi::OrderTp *order,
+                               const SecurityPosition *, NOVA_ORDER_STATUS st) {
+  INFO_FLOG("[Strategy] on_order_done: qty={} qty_traded={} status={}",
+            order ? order->order.quantity : 0, order ? order->qty_traded : 0,
+            (int)st);
+}
 
-void TakingDemo::on_order_accepted(const StrategyApi::OrderTp *,
-                                   const SecurityPosition *) {}
+void TakingDemo::on_order_accepted(const StrategyApi::OrderTp *order,
+                                   const SecurityPosition *) {
+  INFO_FLOG("[Strategy] on_order_accepted: qty={} price={}",
+            order ? order->order.quantity : 0, order ? order->order.price : 0);
+}
 
 void TakingDemo::on_order_amended(const StrategyApi::OrderTp *,
                                   const SecurityPosition *, int32_t) {}

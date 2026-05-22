@@ -63,6 +63,11 @@ if(EXISTS ${PROJECT_SOURCE_DIR}/strategy)
     add_subdirectory(${PROJECT_SOURCE_DIR}/strategy)
 endif()
 
+# 添加 coinsimulator (coinrunner 可执行程序)
+if(EXISTS ${PROJECT_SOURCE_DIR}/ext/coinsimulator)
+    add_subdirectory(${PROJECT_SOURCE_DIR}/ext/coinsimulator)
+endif()
+
 # IF(EXISTS ${PROJECT_SOURCE_DIR}/Relaxquant_Release)
 # FILE(COPY ${PROJECT_SOURCE_DIR}/include DESTINATION ${PROJECT_SOURCE_DIR}/Relaxquant_Release)
 # FILE(GLOB HERMES_LIBS ${PROJECT_SOURCE_DIR}/ext/Hermes_Release/lib/lib*.so)

@@ -15,6 +15,7 @@ using namespace time_util;
 using namespace file_util;
 
 inline int tick_size_to_price_precision(double tick_size) {
+  if (tick_size <= 0.0) return 0;
   int precision = 0;
   while (tick_size < 1) {
     tick_size *= 10;

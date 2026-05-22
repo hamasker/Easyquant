@@ -1,4 +1,5 @@
 #include "nvws/ws_websocket_client.h"
+#include <pthread.h>
 #include "base/base_base64.h"
 #include "base/base_hash.h"
 #include "base/base_os_socket.h"
@@ -39,12 +40,27 @@ class WSClientApiImpl : public WSClientApi {
 public:
   WSClientApiImpl(WSClientSpi *spi, bool tls, int group)
       : spi_(spi), use_tls_(tls), group_(group), sockfd_(-1), ssl_(nullptr),
-        ssl_ctx_(nullptr), state_(WS_STATE_CLOSED), thread_pool_(nullptr) {}
+        ssl_ctx_(nullptr), state_(WS_STATE_CLOSED), io_thread_(nullptr),
+        io_stop_(false), proxy_port_(0) {
+    // 读取代理设置
+    const char *proxy_env = getenv("https_proxy");
+    if (!proxy_env) proxy_env = getenv("HTTPS_PROXY");
+    if (proxy_env) {
+      auto proxy_url = std::string(proxy_env);
+      auto scheme_end = proxy_url.find("://");
+      if (scheme_end != std::string::npos)
+        proxy_url = proxy_url.substr(scheme_end + 3);
+      auto colon = proxy_url.find(':');
+      if (colon != std::string::npos) {
+        proxy_host_ = proxy_url.substr(0, colon);
+        proxy_port_ = std::stoi(proxy_url.substr(colon + 1));
+      }
+    }
+  }
 
   virtual ~WSClientApiImpl() {
     Stop();
-    // 不要 delete 单例实例
-    thread_pool_ = nullptr;
+    io_thread_ = nullptr;
   }
 
   WS_ERROR_INFO Initialize(const char *url, int32_t core = -1,
@@ -75,19 +91,24 @@ public:
       }
     }
 
-    // 获取线程池单例
-    thread_pool_ = WSThreadPool::Instance();
-    thread_pool_->SetCore(core);
-    thread_pool_->SetLoopMS(loop_ms);
-    thread_pool_->SetDeleteTaskIfException(false);
-
-    // 添加连接任务
-    thread_pool_->AddTask([this]() -> bool { return this->ProcessConnect(); });
-
-    // 添加接收任务
-    thread_pool_->AddTask([this]() -> bool { return this->ProcessReceive(); });
-
-    thread_pool_->Run();
+    // 创建独立后台线程 (不使用共享 WSThreadPool, 每个连接独立线程)
+    int32_t lms = loop_ms;
+    int32_t bind_core = core;
+    io_thread_ = new std::thread([this, lms, bind_core]() {
+      // 绑核
+      if (bind_core >= 0) {
+        cpu_set_t cpuset;
+        CPU_ZERO(&cpuset);
+        CPU_SET(static_cast<size_t>(bind_core), &cpuset);
+        pthread_setaffinity_np(pthread_self(), sizeof(cpuset), &cpuset);
+      }
+      // 连接
+      if (!ProcessConnect()) return;
+      // 接收循环: SSL_read 为阻塞模式, 有数据时立即处理, 无数据时阻塞等待
+      while (state_ == WS_STATE_OPEN && !io_stop_) {
+        ProcessReceive();
+      }
+    });
 
     err.Set(WS_OK, "Success");
     return err;
@@ -95,12 +116,15 @@ public:
 
   void Stop() override {
     state_ = WS_STATE_CLOSING;
-
-    if (thread_pool_) {
-      thread_pool_->Stop();
-    }
+    io_stop_ = true;
 
     CloseConnection();
+
+    if (io_thread_ && io_thread_->joinable()) {
+      io_thread_->join();
+      delete io_thread_;
+      io_thread_ = nullptr;
+    }
 
     state_ = WS_STATE_CLOSED;
   }
@@ -112,6 +136,7 @@ public:
     }
 
     Stop();
+    io_stop_ = false;
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
     // 重新初始化
@@ -234,11 +259,19 @@ private:
     int flags = fcntl(sockfd_, F_GETFL, 0);
     fcntl(sockfd_, F_SETFL, flags | O_NONBLOCK);
 
+    // 代理模式: 连接代理而不是目标主机
+    std::string real_host = host_;
+    int real_port = port_;
+    if (!proxy_host_.empty()) {
+      real_host = proxy_host_;
+      real_port = proxy_port_;
+    }
+
     // 解析主机名
-    struct hostent *server = gethostbyname(host_.c_str());
+    struct hostent *server = gethostbyname(real_host.c_str());
     if (!server) {
       WS_ERROR_INFO err;
-      err.Set(WS_ERR, "Failed to resolve hostname");
+      err.Set(WS_ERR, "Failed to resolve hostname: %s", real_host.c_str());
       if (spi_)
         spi_->OnFail(err);
       close(sockfd_);
@@ -252,7 +285,7 @@ private:
     memset(&serv_addr, 0, sizeof(serv_addr));
     serv_addr.sin_family = AF_INET;
     memcpy(&serv_addr.sin_addr.s_addr, server->h_addr, server->h_length);
-    serv_addr.sin_port = htons(port_);
+    serv_addr.sin_port = htons(real_port);
 
     int ret =
         connect(sockfd_, (struct sockaddr *)&serv_addr, sizeof(serv_addr));
@@ -285,10 +318,58 @@ private:
       return true;
     }
 
-    // select 成功后，切回阻塞模式，避免 SSL 握手反复返回 WANT_READ/WRITE
-    int cur_flags = fcntl(sockfd_, F_GETFL, 0);
-    if (cur_flags != -1) {
-      fcntl(sockfd_, F_SETFL, cur_flags & ~O_NONBLOCK);
+    // 代理 HTTP CONNECT 隧道
+    if (!proxy_host_.empty()) {
+      // 切回阻塞模式进行 CONNECT 握手
+      int cur_flags = fcntl(sockfd_, F_GETFL, 0);
+      if (cur_flags != -1) {
+        fcntl(sockfd_, F_SETFL, cur_flags & ~O_NONBLOCK);
+      }
+
+      auto target = host_ + ":" + std::to_string(port_);
+      std::string req = "CONNECT " + target + " HTTP/1.1\r\nHost: " + target +
+                        "\r\n\r\n";
+      if (send(sockfd_, req.c_str(), req.size(), 0) <= 0) {
+        WS_ERROR_INFO err;
+        err.Set(WS_ERR, "Failed to send CONNECT to proxy");
+        if (spi_) spi_->OnFail(err);
+        close(sockfd_);
+        sockfd_ = -1;
+        state_ = WS_STATE_CLOSED;
+        return true;
+      }
+
+      char buf[4096];
+      ssize_t n = recv(sockfd_, buf, sizeof(buf) - 1, 0);
+      if (n <= 0) {
+        WS_ERROR_INFO err;
+        err.Set(WS_ERR, "No response from proxy");
+        if (spi_) spi_->OnFail(err);
+        close(sockfd_);
+        sockfd_ = -1;
+        state_ = WS_STATE_CLOSED;
+        return true;
+      }
+      buf[n] = '\0';
+      std::string resp(buf, n);
+      if (resp.find("200") == std::string::npos) {
+        WS_ERROR_INFO err;
+        // 找第一行作为错误
+        auto nl = resp.find('\r');
+        err.Set(WS_ERR, "Proxy CONNECT failed: %s",
+                resp.substr(0, nl).c_str());
+        if (spi_) spi_->OnFail(err);
+        close(sockfd_);
+        sockfd_ = -1;
+        state_ = WS_STATE_CLOSED;
+        return true;
+      }
+    } else {
+      // 无代理: 直接切回阻塞模式
+      int cur_flags = fcntl(sockfd_, F_GETFL, 0);
+      if (cur_flags != -1) {
+        fcntl(sockfd_, F_SETFL, cur_flags & ~O_NONBLOCK);
+      }
     }
 
     // 如果使用TLS，建立SSL连接
@@ -420,10 +501,13 @@ private:
     }
     buffer[n] = '\0';
 
-    // 验证握手响应
+    // 验证握手响应 (大小写不敏感)
     std::string response(buffer);
-    if (response.find("HTTP/1.1 101") == std::string::npos ||
-        response.find("Upgrade: websocket") == std::string::npos) {
+    std::string lower_resp = response;
+    std::transform(lower_resp.begin(), lower_resp.end(), lower_resp.begin(),
+                   ::tolower);
+    if (lower_resp.find("http/1.1 101") == std::string::npos ||
+        lower_resp.find("upgrade: websocket") == std::string::npos) {
       return false;
     }
 
@@ -635,7 +719,12 @@ private:
   SSL_CTX *ssl_ctx_;
 
   WS_STATE_TYPE state_;
-  WSThreadPool *thread_pool_;
+
+  std::thread *io_thread_ = nullptr;
+  std::atomic<bool> io_stop_{false};
+
+  std::string proxy_host_;
+  int proxy_port_;
 
   WS_ERROR_INFO last_error_;
   WS_ERROR_INFO local_close_info_;
