@@ -851,6 +851,11 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
         }
       }
 
+      // 只保留最优 25 档, 其余丢弃省 CPU
+      constexpr int kMaxCBLevels = 25;
+      while ((int)bids.size() > kMaxCBLevels) bids.erase(std::prev(bids.end()));
+      while ((int)asks.size() > kMaxCBLevels) asks.erase(std::prev(asks.end()));
+
       if (!bids.empty() && !asks.empty()) {
         NovaCoinBBO bbo{};
         // 从 symbol_to_inst_ 查找, 大小写不敏感
