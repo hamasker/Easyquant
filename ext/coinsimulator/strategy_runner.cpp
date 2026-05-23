@@ -568,7 +568,7 @@ void StrategyRunner::Run() {
 
     // ── 空闲 ──
     t0 = NowNs();
-    std::this_thread::yield();
+    std::this_thread::sleep_for(std::chrono::microseconds(500));
     t_idle += NowNs() - t0;
     ++n_loops;
 
