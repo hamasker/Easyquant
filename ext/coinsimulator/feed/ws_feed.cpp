@@ -340,6 +340,12 @@ bool WSFeed::Poll() {
         ws_client_->Send("ping", 4);
         last_data_ns_ = NowNs();
       }
+      // 数据超时检测: 60s 无任何数据, 强制断开重连
+      if (last_data_ns_ > 0 && NowNs() - last_data_ns_ > 60'000'000'000LL) {
+        INFO_FLOG("[WSFeed] {} data timeout (60s), force reconnect", exchange_);
+        ws_client_->Stop();
+        ResetConnection();
+      }
     } else if (st == nova::ws::WS_STATE_CLOSED && connect_ts_ > 0) {
       // 指数退避重试: 2s → 4s → 8s → ... → 60s
       int64_t backoff_s = 2LL << retry_count_;
