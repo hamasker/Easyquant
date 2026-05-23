@@ -528,15 +528,22 @@ void StrategyRunner::Run() {
   INFO_FLOG("[Runner] Starting main loop in {} mode with {} feed(s)", mode_,
             feeds_.size());
 
+  // 性能剖析: 每 10s 输出各阶段累计耗时
+  uint64_t t_poll = 0, t_onpoll = 0, t_reminder = 0, t_idle = 0;
+  uint64_t n_loops = 0, last_report_ns = 0;
+
   while (running_) {
     uint64_t loop_start = NowNs();
 
+    // ── Feed 轮询 ──
+    uint64_t t0 = NowNs();
     bool any_alive = false;
     for (auto &feed : feeds_) {
       if (feed && feed->Poll()) {
         any_alive = true;
       }
     }
+    t_poll += NowNs() - t0;
 
     if (feeds_.empty()) {
       std::this_thread::yield();
@@ -547,13 +554,39 @@ void StrategyRunner::Run() {
       break;
     }
 
+    // ── 策略回调 ──
+    t0 = NowNs();
     if (strategy_) {
       strategy_->on_poll(static_cast<int64_t>(loop_start));
     }
+    t_onpoll += NowNs() - t0;
 
+    // ── Reminder ──
+    t0 = NowNs();
     ProcessReminders(loop_start);
+    t_reminder += NowNs() - t0;
 
+    // ── 空闲 ──
+    t0 = NowNs();
     std::this_thread::yield();
+    t_idle += NowNs() - t0;
+    ++n_loops;
+
+    // 每 10s 打印一次剖析报告
+    if (last_report_ns == 0) last_report_ns = loop_start;
+    if (loop_start - last_report_ns > 10'000'000'000ULL) {
+      auto ms = [](uint64_t ns) { return ns / 1'000'000ULL; };
+      uint64_t total = t_poll + t_onpoll + t_reminder + t_idle;
+      INFO_FLOG("[Profiler] {} loops in 10s | Poll={}ms({:.0f}%) on_poll={}ms({:.0f}%) Reminder={}ms({:.0f}%) Idle={}ms({:.0f}%)",
+                n_loops,
+                ms(t_poll), total > 0 ? t_poll * 100.0 / total : 0,
+                ms(t_onpoll), total > 0 ? t_onpoll * 100.0 / total : 0,
+                ms(t_reminder), total > 0 ? t_reminder * 100.0 / total : 0,
+                ms(t_idle), total > 0 ? t_idle * 100.0 / total : 0);
+      t_poll = t_onpoll = t_reminder = t_idle = 0;
+      n_loops = 0;
+      last_report_ns = loop_start;
+    }
   }
 
   INFO_LOG("[Runner] Main loop exited");
