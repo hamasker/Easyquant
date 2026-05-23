@@ -163,7 +163,7 @@ def encode_bbo(ts_ns, inst_id_28, row):
     bid_qty = float(row.get("bids[0].amount", 0) or 0)
     ask_px = float(row.get("asks[0].price", 0) or 0)
     ask_qty = float(row.get("asks[0].amount", 0) or 0)
-    local_ns = int(row.get("local_timestamp", ts_ns))
+    local_ns = int(float(row.get("local_timestamp", ts_ns / 1000)) * 1000)
     body = struct.pack(BBO_FMT, bid_px, bid_qty, ask_px, ask_qty, local_ns)
     return header + body
 
@@ -186,7 +186,7 @@ def encode_depth(ts_ns, inst_id_28, row):
         bids_qty[i] = float(bq)
         asks_px[i] = float(ap)
         asks_qty[i] = float(aq)
-    local_ns = int(row.get("local_timestamp", ts_ns))
+    local_ns = int(float(row.get("local_timestamp", ts_ns / 1000)) * 1000)
     body = struct.pack(DEPTH_FMT, ob_level, int(local_ns),
                        *bids_px, *bids_qty, *asks_px, *asks_qty)
     return header + body
@@ -197,7 +197,7 @@ def encode_trade(ts_ns, inst_id_28, row):
     price = float(row.get("price", 0))
     qty = float(row.get("amount", 0))
     side = 1 if str(row.get("side", "buy")).lower() in ("buy", "b") else 2
-    local_ns = int(row.get("local_timestamp", ts_ns))
+    local_ns = int(float(row.get("local_timestamp", ts_ns / 1000)) * 1000)
     body = struct.pack(TRADE_FMT, price, qty, side, int(local_ns))
     return header + body
 
@@ -236,18 +236,19 @@ def main():
         chunk.clear()
 
     # Load book_snapshots → depth + BBO records
-    for ts_ns, row in load_book_snapshots(exchange, symbol, dates):
-        ts = int(ts_ns)
+    # Tardis timestamps are in microseconds → convert to nanoseconds (×1000)
+    for ts_us, row in load_book_snapshots(exchange, symbol, dates):
+        ts = int(ts_us) * 1000
         chunk.append((ts, encode_bbo(ts, inst_id_28, row)))
         chunk.append((ts, encode_depth(ts, inst_id_28, row)))
         total_records += 2
         if len(chunk) >= CHUNK:
             flush_chunk()
 
-    # Load trades
+    # Load trades (timestamps also in microseconds)
     for row in load_trades(exchange, symbol, dates):
-        ts_ns = int(row["timestamp"])
-        chunk.append((ts_ns, encode_trade(ts_ns, inst_id_28, row)))
+        ts = int(row["timestamp"]) * 1000
+        chunk.append((ts, encode_trade(ts, inst_id_28, row)))
         total_records += 1
         if len(chunk) >= CHUNK:
             flush_chunk()
