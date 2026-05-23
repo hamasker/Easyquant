@@ -221,7 +221,8 @@ public:
     }
     // Mexc JSON ping: {"method":"PING"}
     if (exchange_ == "mexc" && len > 10 && strncmp(msg, "{\"method\":\"PING\"}", 16) == 0) {
-      api_->Send("{\"method\":\"PONG\"}", 17, 0);
+      static const char pong[] = "{\"method\":\"PONG\"}";
+      api_->Send(pong, sizeof(pong) - 1);
       return;
     }
     try {
