@@ -86,7 +86,3 @@ private:
 
   int64_t global_ts = 0;
 };
-
-#ifdef COINRUNNER_BUILD
-#include "coinrunner_log.h"
-#endif

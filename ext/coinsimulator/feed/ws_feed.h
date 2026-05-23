@@ -62,6 +62,7 @@ private:
   bool connected_ = false;
   int64_t connect_ts_ = 0;
   int64_t last_data_ns_ = 0; // 最近一次收到数据的时间
+  int retry_count_ = 0;        // 重连次数, 用于指数退避
   int core_ = -1;
 };
 

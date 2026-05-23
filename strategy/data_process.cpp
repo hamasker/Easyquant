@@ -19,6 +19,8 @@ double get_exchange_taker_fee(const Configs &CFG_,
     return CFG_.Strategy.Stable.bn_taker_fee;
   else if (exchange == "ok")
     return CFG_.Strategy.Stable.ok_taker_fee;
+  else if (exchange == "mexc")
+    return 0.0002;
   else if (exchange == "cb")
     return CFG_.Strategy.Stable.cb_taker_fee;
   else if (exchange == "idealpro")
@@ -58,6 +60,7 @@ bool fetch_data(const nova::quote::DataInfo &one,
   auto &id_map = InstData_.IM.inststr2id_;
   std::string inst_str;
   int64_t ts = 0;
+  if (CFG_.Strategy.Verbose.ob) DEBUG_FLOG("[Ob] qtype={}", (int)quote_type);
   if (quote_type == NOVA_COIN_QUOTE_DEPTH) {
     const auto &data = *static_cast<const Depth *>(one.buffer().back());
     inst_str = data.instrument_id.symbol;
@@ -65,8 +68,8 @@ bool fetch_data(const nova::quote::DataInfo &one,
     auto id = id_map.at(inst_str);
     auto &depth_map = InstData_.depth_map[id];
     if (CFG_.Strategy.Verbose.ob)
-      DEBUG_FLOG("{} depth bid: {}, ask: {}", inst_str, data.bid[0].price,
-                 data.ask[0].price);
+      DEBUG_FLOG("[Ob] depth {} bid0={:.4f} ask0={:.4f}", inst_str,
+                 data.bid[0].price, data.ask[0].price);
     if (static_cast<uint64_t>(depth_map.sequence_num) < data.sequence_num)
       extract_depth_data(data, depth_map, InstData_.delay_map);
   } else if (quote_type == NOVA_COIN_QUOTE_DEPTH_LVN) {
@@ -76,8 +79,8 @@ bool fetch_data(const nova::quote::DataInfo &one,
     auto id = id_map.at(inst_str);
     auto &depth_map = InstData_.depth_map[id];
     if (CFG_.Strategy.Verbose.ob)
-      DEBUG_FLOG("{} depth_lvn bid: {}, ask: {}", inst_str, data.bid[0].price,
-                 data.ask[0].price);
+      DEBUG_FLOG("[Ob] depth_lvn {} bid0={:.4f} ask0={:.4f}", inst_str,
+                 data.bid[0].price, data.ask[0].price);
     extract_depth_data(data, depth_map, InstData_.delay_map);
   } else if (quote_type == NOVA_COIN_QUOTE_BBO) {
     const auto &data = *static_cast<const BBO *>(one.buffer().back());
@@ -86,8 +89,8 @@ bool fetch_data(const nova::quote::DataInfo &one,
     auto id = id_map.at(inst_str);
     auto &bbo_map = InstData_.bbo_map[id];
     if (CFG_.Strategy.Verbose.ob)
-      DEBUG_FLOG("{} bbo bid: {}, ask: {}", inst_str, data.bid_price,
-                 data.ask_price);
+      DEBUG_FLOG("[Ob] bbo {} bid={:.4f} ask={:.4f}", inst_str,
+                 data.bid_price, data.ask_price);
     extract_bbo_data(data, bbo_map, InstData_.delay_map);
   } else if (quote_type == NOVA_COIN_QUOTE_BAR) {
     const auto &data = *static_cast<const Bar *>(one.buffer().back());
@@ -112,9 +115,8 @@ bool fetch_data(const nova::quote::DataInfo &one,
     auto &depth_map = InstData_.depth_map[id];
     auto &bbo_map = InstData_.bbo_map[id];
     if (CFG_.Strategy.Verbose.ob)
-      DEBUG_FLOG("{} trade side: {}, price: {}, qty: {}", inst_str,
-                 data.side == NOVA_SIDE_BUY ? "BUY" : "SELL", data.price,
-                 data.qty);
+      DEBUG_FLOG("[Ob] trade {} side={} price={:.4f} qty={:.6f}", inst_str,
+                 data.side == NOVA_SIDE_BUY ? "BUY" : "SELL", data.price, data.qty);
     extract_trade_data(data, depth_map, bbo_map, InstData_.delay_map);
   } else {
     throw std::invalid_argument("invalid quote type!");

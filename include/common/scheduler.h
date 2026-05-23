@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 
 namespace nova {
@@ -24,7 +25,7 @@ struct ModuleScheduler {
   bool flag_first = true;
   bool flag_data_ready = false;
   bool disconnect_flag = false;
-  int new_data_count_ = 0; // on_datainfo 计数, on_poll 消费
+  std::atomic<int> new_data_count_{0}; // on_datainfo 计数, on_poll 消费
 
   inline void init(double negative_interval_ms, double fp_turnover_usd_,
                    double order_turnover_usd_, double fp_interval_max_ms,

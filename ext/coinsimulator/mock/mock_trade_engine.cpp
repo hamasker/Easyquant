@@ -19,6 +19,11 @@ MockTradeEngine::MockTradeEngine(NOVA_EXCHANGE_TYPE exch,
   report_queue_ = new ReportQueueTp();
 }
 
+MockTradeEngine::~MockTradeEngine() {
+  delete report_queue_;
+  report_queue_ = nullptr;
+}
+
 MockTradeEngine::ReportQueueTp *MockTradeEngine::message_queue() {
   return report_queue_;
 }
@@ -62,6 +67,7 @@ double MockTradeEngine::GetRateLimit(const std::string &) { return 225.0; }
 
 void MockTradeEngine::UpdateBBO(const InstrumentId &inst, double bid,
                                 double ask, double bid_qty, double ask_qty) {
+  std::lock_guard<std::recursive_mutex> lk(mutex_);
   auto key = inst.key();
   auto &bbo = bbo_map_[key];
   bbo.bid = bid;
@@ -77,6 +83,14 @@ void MockTradeEngine::UpdateBBO(const InstrumentId &inst, double bid,
     auto oit = orders.begin();
     while (oit != orders.end()) {
       if (TryMatch(*oit)) {
+        // 清理 detail_to_order_ 中指向该订单的条目
+        for (auto dit = detail_to_order_.begin(); dit != detail_to_order_.end(); ) {
+          if (dit->second == &*oit) {
+            dit = detail_to_order_.erase(dit);
+          } else {
+            ++dit;
+          }
+        }
         oit = orders.erase(oit);
       } else {
         ++oit;
@@ -86,10 +100,18 @@ void MockTradeEngine::UpdateBBO(const InstrumentId &inst, double bid,
 }
 
 void MockTradeEngine::MatchAll() {
+  std::lock_guard<std::recursive_mutex> lk(mutex_);
   for (auto &[key, orders] : order_books_) {
     auto it = orders.begin();
     while (it != orders.end()) {
       if (TryMatch(*it)) {
+        for (auto dit = detail_to_order_.begin(); dit != detail_to_order_.end(); ) {
+          if (dit->second == &*it) {
+            dit = detail_to_order_.erase(dit);
+          } else {
+            ++dit;
+          }
+        }
         it = orders.erase(it);
       } else {
         ++it;
@@ -264,6 +286,8 @@ void MockTradeEngine::RecordOrder(const NovaOrder &order, const char *event) {
 void MockTradeEngine::DoSendOrder(const NovaOrderDetail *detail) {
   if (!detail || !strategy_) return;
 
+  std::lock_guard<std::recursive_mutex> lk(mutex_);
+
   // 拒单检查
   if (detail->order.quantity <= 0 || detail->order.price <= 0 ||
       !detail->order.instrument_id.Valid()) {
@@ -319,6 +343,8 @@ void MockTradeEngine::DoSendOrder(const NovaOrderDetail *detail) {
 
 void MockTradeEngine::DoCancelOrder(const NovaOrderDetail *detail) {
   if (!detail) return;
+
+  std::lock_guard<std::recursive_mutex> lk(mutex_);
 
   // 先按指针精确查找
   auto dit = detail_to_order_.find(detail);

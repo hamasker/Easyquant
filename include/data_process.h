@@ -57,7 +57,7 @@ void extract_bbo_data(const BBO &md, data::bbo_data &dd,
                       double alpha_fast = 0.5);
 
 void extract_bar_data(
-    const Bar &md, data::bar_data dd,
+    const Bar &md, data::bar_data &dd,
     std::unordered_map<uint16_t, data::delay_data> &delay_map);
 
 void extract_trade_data(

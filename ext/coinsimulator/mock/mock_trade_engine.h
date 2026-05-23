@@ -3,6 +3,7 @@
 #include "trade/trade_engine.h"
 
 #include <list>
+#include <mutex>
 #include <unordered_map>
 
 BEGIN_NOVA_NAMESPACE(trade)
@@ -23,6 +24,7 @@ class MockTradeEngine : public TradeEngine {
 public:
   MockTradeEngine(NOVA_EXCHANGE_TYPE exch = NOVA_EXCHANGE_KRAKE,
                   NOVA_COIN_INST_TYPE inst = NOVA_COIN_INST_TYPE_SPOT);
+  ~MockTradeEngine() override;
 
   const char *name() const override { return "mock"; }
   ReportQueueTp *message_queue() override;
@@ -90,6 +92,7 @@ private:
   std::unordered_map<InstrumentId::Key, std::list<PendingOrder>> order_books_;
   std::unordered_map<const NovaOrderDetail *, PendingOrder *> detail_to_order_;
   std::atomic<uint32_t> next_order_id_{1};
+  mutable std::recursive_mutex mutex_;
 
   FundAssetManagerTp fund_assets_;
   AccountPositionManagerTp account_positions_;

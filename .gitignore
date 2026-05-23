@@ -29,3 +29,5 @@ compile_commands.json
 ./python/trade_prob/output/
 */output/*
 python/trade_prob/output/fps/*.json
+config/prod_config.json
+*.so

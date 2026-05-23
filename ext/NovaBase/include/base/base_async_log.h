@@ -16,9 +16,13 @@
 #include <iostream>
 #include <mutex>
 #include <string>
+#include <sys/stat.h>
+#include <thread>
 #include <tuple>
 #include <type_traits>
 #include <typeindex>
+#include <unistd.h>
+#include <vector>
 
 #include "base/base_error.h"
 #include "base/base_os_io.h"
@@ -729,19 +733,140 @@ private:
   _CALL_ASYNC_FLOG(::nova::log::LOG_LEVEL_TRACE, _macro_fmt, ##__VA_ARGS__)
 
 #else
-#define FATAL_LOG(...) ((void)0)
-#define ERROR_LOG(...) ((void)0)
-#define WARNING_LOG(...) ((void)0)
-#define INFO_LOG(...) ((void)0)
-#define DEBUG_LOG(...) ((void)0)
-#define TRACE_LOG(...) ((void)0)
+// ============================================================
+// Lightweight logging when NovaBase async logger is disabled
+// Timestamped output to stderr and/or file, with optional async
+// ============================================================
+namespace nova { namespace log {
 
-#define FATAL_FLOG(...) ((void)0)
-#define ERROR_FLOG(...) ((void)0)
-#define WARNING_FLOG(...) ((void)0)
-#define INFO_FLOG(...) ((void)0)
-#define DEBUG_FLOG(...) ((void)0)
-#define TRACE_FLOG(...) ((void)0)
+inline int g_screen_level = LOG_LEVEL_INFO;
+inline int g_file_level = LOG_LEVEL_DEBUG;
+inline FILE *g_log_file = nullptr;
+inline bool g_async = false;
+inline std::atomic<bool> g_writer_running{false};
+inline std::thread g_writer_thread;
+inline std::mutex g_queue_lock;
+inline std::vector<std::string> g_queue;
+
+inline void SetLogFile(const char *path) {
+  std::string p(path);
+  auto slash = p.rfind('/');
+  if (slash != std::string::npos) {
+    std::string dir = p.substr(0, slash);
+    mkdir(dir.c_str(), 0755);
+  }
+  if (g_log_file) fclose(g_log_file);
+  g_log_file = fopen(path, "a");
+  if (g_log_file) setvbuf(g_log_file, nullptr, _IOLBF, 0);
+}
+
+inline void SetScreenLevel(int lv) { g_screen_level = lv; }
+inline void SetFileLevel(int lv) { g_file_level = lv; }
+
+inline void SetAsync(bool on) {
+  if (on && !g_async) {
+    g_async = true;
+    g_writer_running = true;
+    g_writer_thread = std::thread([] {
+      std::vector<std::string> batch;
+      while (g_writer_running) {
+        {
+          std::lock_guard<std::mutex> lk(g_queue_lock);
+          std::swap(batch, g_queue);
+        }
+        for (auto &s : batch) {
+          fputs(s.c_str(), g_log_file ? g_log_file : stderr);
+          fputs(s.c_str(), stderr);
+        }
+        batch.clear();
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      }
+      std::lock_guard<std::mutex> lk(g_queue_lock);
+      for (auto &s : g_queue) {
+        fputs(s.c_str(), g_log_file ? g_log_file : stderr);
+        fputs(s.c_str(), stderr);
+      }
+      g_queue.clear();
+    });
+  }
+}
+
+inline void StopAsync() {
+  if (g_async) {
+    g_writer_running = false;
+    if (g_writer_thread.joinable()) g_writer_thread.join();
+    g_async = false;
+  }
+}
+
+}} // namespace nova::log
+
+namespace { struct _NovaLogAsyncGuard { ~_NovaLogAsyncGuard() { nova::log::StopAsync(); } } _nova_log_async_guard; }
+
+#define _LIGHTWEIGHT_FLOG(_m_level, _tag, _fmt, ...)                           \
+  do {                                                                          \
+    int _cr_lv = (int)(_m_level);                                                \
+    bool _cr_to_scrn = (_cr_lv <= ::nova::log::g_screen_level);                  \
+    bool _cr_to_file = (::nova::log::g_log_file &&                               \
+                        _cr_lv <= ::nova::log::g_file_level);                    \
+    if (!_cr_to_scrn && !_cr_to_file) break;                                     \
+    auto _cr_now = std::chrono::system_clock::now();                             \
+    auto _cr_tt = std::chrono::system_clock::to_time_t(_cr_now);                 \
+    auto _cr_us = std::chrono::duration_cast<std::chrono::microseconds>(         \
+        _cr_now.time_since_epoch()).count() % 1000000;                           \
+    char _cr_ts[32]; (void)strftime(_cr_ts, sizeof(_cr_ts), "%H:%M:%S",          \
+                                 localtime(&_cr_tt));                             \
+    static const char *_cr_lv_str[] = {"F","E","W","I","D","T"};                 \
+    auto _cr_hdr = fmt::format("[{}.{:06d}] [{}] [{}] ", _cr_ts, (int)_cr_us,    \
+                           _cr_lv_str[_cr_lv], getpid());                         \
+    auto _cr_msg = fmt::format("{}{}\n", _cr_hdr,                                 \
+                               fmt::format(_tag _fmt, ##__VA_ARGS__));            \
+    if (::nova::log::g_async) {                                                   \
+      if (_cr_to_scrn) fputs(_cr_msg.c_str(), stderr);                            \
+      if (_cr_to_file) {                                                          \
+        std::lock_guard<std::mutex> _cr_lk(::nova::log::g_queue_lock);            \
+        ::nova::log::g_queue.push_back(std::move(_cr_msg));                       \
+      }                                                                           \
+    } else {                                                                      \
+      if (_cr_to_scrn) fputs(_cr_msg.c_str(), stderr);                            \
+      if (_cr_to_file) fputs(_cr_msg.c_str(), ::nova::log::g_log_file);           \
+    }                                                                             \
+  } while (0)
+
+#define _LIGHTWEIGHT_LOG(_m_level, _tag, _fmt, ...)                            \
+  do {                                                                          \
+    int _cr_lv = (int)(_m_level);                                                \
+    bool _cr_to_scrn = (_cr_lv <= ::nova::log::g_screen_level);                  \
+    bool _cr_to_file = (::nova::log::g_log_file &&                               \
+                        _cr_lv <= ::nova::log::g_file_level);                    \
+    if (!_cr_to_scrn && !_cr_to_file) break;                                     \
+    auto _cr_now = std::chrono::system_clock::now();                             \
+    auto _cr_tt = std::chrono::system_clock::to_time_t(_cr_now);                 \
+    auto _cr_us = std::chrono::duration_cast<std::chrono::microseconds>(         \
+        _cr_now.time_since_epoch()).count() % 1000000;                           \
+    char _cr_ts[32]; (void)strftime(_cr_ts, sizeof(_cr_ts), "%H:%M:%S",          \
+                                 localtime(&_cr_tt));                             \
+    static const char *_cr_lv_str[] = {"F","E","W","I","D","T"};                 \
+    auto _cr_hdr = fmt::format("[{}.{:06d}] [{}] [{}] ", _cr_ts, (int)_cr_us,    \
+                           _cr_lv_str[_cr_lv], getpid());                         \
+    auto _cr_msg = _cr_hdr + fmt::format(_tag _fmt, ##__VA_ARGS__);              \
+    if (_cr_to_scrn) fprintf(stderr, "%s\n", _cr_msg.c_str());                   \
+    if (_cr_to_file) fprintf(::nova::log::g_log_file, "%s\n", _cr_msg.c_str());  \
+  } while (0)
+
+#define FATAL_LOG(_fmt, ...)   _LIGHTWEIGHT_LOG(::nova::log::LOG_LEVEL_FATAL,   "[FATAL] ", _fmt, ##__VA_ARGS__)
+#define ERROR_LOG(_fmt, ...)   _LIGHTWEIGHT_LOG(::nova::log::LOG_LEVEL_ERROR,   "[ERROR] ", _fmt, ##__VA_ARGS__)
+#define WARNING_LOG(_fmt, ...) _LIGHTWEIGHT_LOG(::nova::log::LOG_LEVEL_WARNING, "[WARN] ",  _fmt, ##__VA_ARGS__)
+#define INFO_LOG(_fmt, ...)    _LIGHTWEIGHT_LOG(::nova::log::LOG_LEVEL_INFO,    "[INFO] ",  _fmt, ##__VA_ARGS__)
+#define DEBUG_LOG(_fmt, ...)   _LIGHTWEIGHT_LOG(::nova::log::LOG_LEVEL_DEBUG,   "[DEBUG] ", _fmt, ##__VA_ARGS__)
+#define TRACE_LOG(_fmt, ...)   _LIGHTWEIGHT_LOG(::nova::log::LOG_LEVEL_TRACE,   "[TRACE] ", _fmt, ##__VA_ARGS__)
+
+#define FATAL_FLOG(_fmt, ...)   _LIGHTWEIGHT_FLOG(::nova::log::LOG_LEVEL_FATAL,   "[FATAL] ", _fmt, ##__VA_ARGS__)
+#define ERROR_FLOG(_fmt, ...)   _LIGHTWEIGHT_FLOG(::nova::log::LOG_LEVEL_ERROR,   "[ERROR] ", _fmt, ##__VA_ARGS__)
+#define WARNING_FLOG(_fmt, ...) _LIGHTWEIGHT_FLOG(::nova::log::LOG_LEVEL_WARNING, "[WARN] ",  _fmt, ##__VA_ARGS__)
+#define INFO_FLOG(_fmt, ...)    _LIGHTWEIGHT_FLOG(::nova::log::LOG_LEVEL_INFO,    "",         _fmt, ##__VA_ARGS__)
+#define DEBUG_FLOG(_fmt, ...)   _LIGHTWEIGHT_FLOG(::nova::log::LOG_LEVEL_DEBUG,   "[DEBUG] ", _fmt, ##__VA_ARGS__)
+#define TRACE_FLOG(_fmt, ...)   _LIGHTWEIGHT_FLOG(::nova::log::LOG_LEVEL_TRACE,   "[TRACE] ", _fmt, ##__VA_ARGS__)
 #endif
 
 #endif

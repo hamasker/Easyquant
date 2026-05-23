@@ -124,12 +124,14 @@ void TakingDemo::on_datainfo(const DataInfoManager *datainfo, int32_t di,
   ! 读取检查数据
   */
   if (CFG_.Strategy.Verbose.ob && scheduler_.flag_first)
-    DEBUG_FLOG("before fetch data, depth_map size: {}, bbo_map size: {}, "
-               "trade_map size: {}",
+    DEBUG_FLOG("[VerboseOb] before fetch data, depth_map: {} bbo_map: {} trade_map: {}",
                InstData_.depth_map.size(), InstData_.bbo_map.size(),
                InstData_.trade_map.size());
   const auto &one = datainfo->datainfo().at(di);
   scheduler_.new_data_count_++;
+  auto qt = (int)one.quote_type();
+  if (CFG_.Strategy.Verbose.ob)
+    DEBUG_FLOG("[VerboseOb] on_datainfo di={} qtype={}", di, qt);
   scheduler_.flag_data_ready =
       DataProcess::fetch_data(one, InstData_, scheduler_.flag_data_ready, CFG_);
   // 更新 global_ts

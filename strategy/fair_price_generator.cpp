@@ -25,19 +25,14 @@ struct Level {
 // 通用的路径处理函数，支持单腿和双腿路径
 // 对于单腿路径：leg2 为 nullptr，depth2 为 0
 // 对于双腿路径：使用 price_func 和 qty_func 来计算合成价格和数量
+// 模板参数避免 std::function 堆分配和虚函数调用开销
+template <typename PriceFn, typename QtyFn>
 inline void append_path_levels(
     const data::depths_data &leg1, std::size_t depth1,
     const data::depths_data *leg2, std::size_t depth2, std::vector<Level> &bids,
     std::vector<Level> &asks,
-    // 价格计算函数：(leg1_price, leg2_price) -> 合成价格
-    std::function<double(double, double)> price_func,
-    // 数量计算函数：(leg1_price, leg1_qty, leg2_price, leg2_qty) -> 合成数量
-    std::function<double(double, double, double, double)> qty_func,
-    // 对于 bid 方向，leg1 使用 bids 还是 asks；对于 ask 方向，leg1 使用 bids
-    // 还是 asks
+    PriceFn price_func, QtyFn qty_func,
     bool leg1_bid_use_bids, bool leg1_ask_use_bids,
-    // 对于 bid 方向，leg2 使用 bids 还是 asks；对于 ask 方向，leg2 使用 bids
-    // 还是 asks
     bool leg2_bid_use_bids, bool leg2_ask_use_bids) {
 
   // bid 方向（市场买 USDT，我们卖 USDT）
@@ -902,7 +897,7 @@ void FairPriceGenerator::calculate_fp_usdc() {
 
   // 获取 EUR 价格
   double eur_bid, eur_ask;
-  if (this->first_cal) {
+  if (this->first_cal || fps_map_[data::currency::EUR].fps.is_empty()) {
     eur_bid = depth_aim_eurusd.bids[0][0];
     eur_ask = depth_aim_eurusd.asks[0][0];
   } else {
@@ -1471,16 +1466,20 @@ void FairPriceGenerator::calculate_fp_digital(const data::currency &currency) {
       if (IC->inst_str == DataProcess::format_main_exchange_usd_pair(
                               currency_str, CFG_.aim_exchange)) {
         fps_map_[currency].timestamps.add(this->ts_tmp);
-        fps_map_[currency].timestamps.add(this->ts_tmp);
         fps_map_[currency].fps.add(fp_tmp);
         double vp = (fp_tmp[0] + fp_tmp[1]) * 0.5;
         fps_map_[currency].vps.add(vp);
         IC->fp_bid = fp_tmp[0];
         IC->fp_ask = fp_tmp[1];
       } else {
-        const auto &fp_quote = fps_map_[IC->quote].fps.get_latest();
-        IC->fp_bid = fp_tmp[0] / fp_quote[1];
-        IC->fp_ask = fp_tmp[1] / fp_quote[0];
+        if (!fps_map_[IC->quote].fps.is_empty()) {
+          const auto &fp_quote = fps_map_[IC->quote].fps.get_latest();
+          IC->fp_bid = fp_tmp[0] / fp_quote[1];
+          IC->fp_ask = fp_tmp[1] / fp_quote[0];
+        } else {
+          IC->fp_bid = fp_tmp[0];
+          IC->fp_ask = fp_tmp[1];
+        }
       }
       if (CFG_.verbose_fp)
         INFO_FLOG("[new]{} fp_bid: {}, fp_ask: {}, ob_bid: {}, ob_ask: {}, ",
@@ -1582,9 +1581,8 @@ void FairPriceGenerator::calculate_fp_digital_swap(
           cb_Cusd_asks, cb_Cusd_asksv, cb_Cusd_bids, cb_Cusd_bidsv, ts_cb_Cusd,
           tf_cb_Cusd, ema_bidv_cb_Cusd, ema_askv_cb_Cusd);
 
-  // 初始化 NaN 值的 bids 和 asks
   double fp_bid, fp_ask;
-  if (1) {
+  {
     std::vector<double> bids(9, std::numeric_limits<double>::quiet_NaN());
     std::vector<double> asks(9, std::numeric_limits<double>::quiet_NaN());
     const auto &bn_Cusdt_bid = bbo_bn_Cusdt.bid;
@@ -1643,13 +1641,6 @@ void FairPriceGenerator::calculate_fp_digital_swap(
             wp_bn_Cusdt[1],  wp_ok_Cusdt[1],  wp_cb_Cusd[1] / cb_usdtusd_bid0,
             bn_Cusdt_ask[0], ok_Cusdt_ask[0], cb_Cusd_ask / cb_usdtusd_bid0};
 
-    fp_bid = sum_util::CalMedian(bids) * fp_usdt[0];
-    fp_ask = sum_util::CalMedian(asks) * fp_usdt[1];
-  } else {
-    std::vector<double> bids(3, std::numeric_limits<double>::quiet_NaN());
-    std::vector<double> asks(3, std::numeric_limits<double>::quiet_NaN());
-    bids = {wp_bn_Cusdt[0], wp_ok_Cusdt[0], wp_cb_Cusd[0] / cb_usdtusd_ask0};
-    asks = {wp_bn_Cusdt[1], wp_ok_Cusdt[1], wp_cb_Cusd[1] / cb_usdtusd_bid0};
     fp_bid = sum_util::CalMedian(bids) * fp_usdt[0];
     fp_ask = sum_util::CalMedian(asks) * fp_usdt[1];
   }

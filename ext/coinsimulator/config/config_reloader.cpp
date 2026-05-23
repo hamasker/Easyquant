@@ -157,7 +157,7 @@ ConfigReloader::StringToLogLevel(const std::string &level_str) {
 void ConfigReloader::ApplyLogLevel(nova::log::LogLevel new_level) {
   try {
 #ifdef NOVA_BASE_DISABLE_LOGGER
-    coinrunner::SetFileLevel(static_cast<int>(new_level));
+    nova::log::SetFileLevel(static_cast<int>(new_level));
     current_log_level_ = new_level;
     INFO_FLOG("ConfigReloader: Set coinrunner file log level to: {}",
               nova::log::LogLevelString[new_level]);

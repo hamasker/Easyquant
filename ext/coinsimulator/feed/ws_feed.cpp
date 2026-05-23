@@ -58,9 +58,27 @@ std::string ExtractSymbol(const std::string &exchange,
     return "";
   }
   if (exchange == "gateio" || exchange == "gt") {
-    if (data.contains("result") && data["result"].contains("s")) {
-      return data["result"]["s"].get<std::string>();
+    // 新 JSON-RPC: params[0] 或 params[2] 是 symbol
+    if (data.contains("params") && data["params"].is_array()) {
+      const auto &p = data["params"];
+      std::string method = data.value("method", "");
+      if (method == "depth.update" && p.size() >= 3 && p[2].is_string()) {
+        return p[2].get<std::string>();
+      }
+      if (p.size() >= 1 && p[0].is_string()) {
+        return p[0].get<std::string>();
+      }
     }
+    return "";
+  }
+  if (exchange == "mexc") {
+    // MEXC channel 格式: "spot@public.bookTicker.v3.api@BTCUSDT"
+    if (data.contains("c")) {
+      std::string ch = data["c"].get<std::string>();
+      auto pos = ch.rfind('@');
+      return pos != std::string::npos ? ch.substr(pos + 1) : "";
+    }
+    if (data.contains("symbol")) return data["symbol"].get<std::string>();
     return "";
   }
   return "";
@@ -126,11 +144,52 @@ public:
                          {"channels", feed_.channels()}};
       api_->Send(sub.dump());
       INFO_FLOG("[WSFeed] Subscribed to coinbase channels");
+    } else if (exchange_ == "gateio" || exchange_ == "gt") {
+      static int gate_id = 0;
+      for (auto &ch : feed_.channels()) {
+        std::string method = ch + ".subscribe";
+        if (ch == "depth") {
+          // depth 需要 3 个参数: [symbol, limit, "0"]
+          for (auto &sym : feed_.symbols()) {
+            nlohmann::json sub{{"method", method},
+                               {"params", nlohmann::json::array({sym, 1, "0"})},
+                               {"id", ++gate_id},
+                               {"time", (int64_t)(NowNs() / 1'000'000'000)}};
+            api_->Send(sub.dump());
+          }
+        } else {
+          nlohmann::json sub{{"method", method},
+                             {"params", feed_.symbols()},
+                             {"id", ++gate_id},
+                             {"time", (int64_t)(NowNs() / 1'000'000'000)}};
+          api_->Send(sub.dump());
+        }
+      }
+      INFO_FLOG("[WSFeed] Subscribed to {} gateio channels", feed_.channels().size());
+    } else if (exchange_ == "mexc") {
+      // MEXC: 每个 symbol+channel 组合一个 param
+      std::vector<std::string> params;
+      for (auto &sym : feed_.symbols()) {
+        for (auto &ch : feed_.channels()) {
+          params.push_back(ch + "@" + sym);
+        }
+      }
+      nlohmann::json sub{{"method", "SUBSCRIPTION"}, {"params", params}};
+      api_->Send(sub.dump());
+      INFO_FLOG("[WSFeed] Subscribed to {} mexc streams", params.size());
     }
   }
 
   void OnMessage(const char *msg, size_t len, int group) override {
     (void)group;
+    // debug: 打印 gateio/mexc 前几条原始消息
+    if ((exchange_ == "gt" || exchange_ == "mexc") && len > 0) {
+      static int _raw_cnt = 0;
+      if (++_raw_cnt <= 5) {
+        std::string _raw(msg, std::min(len, (size_t)400));
+        WARNING_FLOG("[WSFeed] {} raw[{}]: {}", exchange_, _raw_cnt, _raw);
+      }
+    }
     // OKX/Coinbase 文本心跳: "ping" / "pong"
     if (len <= 4 && msg[0] == 'p') {
       std::string s(msg, len);
@@ -196,6 +255,16 @@ MapChannels(const std::string &exchange,
       else if (ch == "depth") out.push_back("level2");
       else if (ch == "trade") out.push_back("matches");
       else out.push_back(ch);
+    } else if (exchange == "gateio" || exchange == "gt") {
+      // 新 JSON-RPC: bbo → depth(limit=1), trade → trades
+      if (ch == "bbo") out.push_back("depth");
+      else if (ch == "trade") out.push_back("trades");
+      else if (ch == "depth") out.push_back("depth");
+      else out.push_back(ch);
+    } else if (exchange == "mexc") {
+      if (ch == "bbo") out.push_back("spot@public.bookTicker.v3.api");
+      else if (ch == "trade") out.push_back("spot@public.deals.v3.api");
+      else out.push_back(ch);
     } else {
       out.push_back(ch);
     }
@@ -229,6 +298,10 @@ bool WSFeed::Initialize(const nova::base::Config &cfg) {
     ws_url_ = "wss://ws.okx.com:8443/ws/v5/public";
   } else if (exchange_ == "coinbase" || exchange_ == "cb") {
     ws_url_ = "wss://ws-feed.exchange.coinbase.com";
+  } else if (exchange_ == "gateio" || exchange_ == "gt") {
+    ws_url_ = "wss://ws.gateio.ws/v4/ws";
+  } else if (exchange_ == "mexc") {
+    ws_url_ = "wss://wbs.mexc.com/ws";
   } else {
     ERROR_FLOG("[WSFeed] Unknown exchange: {}", exchange_);
     return false;
@@ -251,7 +324,8 @@ bool WSFeed::Poll() {
   if (ws_client_) {
     auto st = ws_client_->state();
     if (st == nova::ws::WS_STATE_OPEN) {
-      connect_ts_ = 0; // 连接成功, 清除时间戳
+      connect_ts_ = 0;       // 连接成功, 清除时间戳
+      retry_count_ = 0;      // 重置重连计数
       // 心跳: 20s 无数据则发 ping 保活
       if (last_data_ns_ > 0 && NowNs() - last_data_ns_ > 20'000'000'000LL) {
         INFO_FLOG("[WSFeed] {} heartbeat ping", exchange_);
@@ -259,9 +333,14 @@ bool WSFeed::Poll() {
         last_data_ns_ = NowNs();
       }
     } else if (st == nova::ws::WS_STATE_CLOSED && connect_ts_ > 0) {
-      // 连接失败: 等待至少 2s 后重试
-      if (NowNs() - connect_ts_ > 2'000'000'000LL) {
-        INFO_FLOG("[WSFeed] {} retry after fail", exchange_);
+      // 指数退避重试: 2s → 4s → 8s → ... → 60s
+      int64_t backoff_s = 2LL << retry_count_;
+      if (backoff_s > 60) backoff_s = 60;
+      int64_t backoff_ns = backoff_s * 1'000'000'000LL;
+      if (NowNs() - connect_ts_ > backoff_ns) {
+        ++retry_count_;
+        INFO_FLOG("[WSFeed] {} retry #{} after {}s backoff", exchange_,
+                  retry_count_, backoff_s);
         ConnectAndSubscribe();
         connect_ts_ = NowNs();
       }
@@ -277,10 +356,13 @@ bool WSFeed::Poll() {
     }
   }
 
-  // 仅空闲时短暂休眠, 有数据/连接时不等待
-  if (ws_client_ && ws_client_->state() == nova::ws::WS_STATE_OPEN &&
-      last_data_ns_ > 0 && (NowNs() - last_data_ns_) < 1'000'000'000LL) {
-    std::this_thread::yield();
+  // 有数据时快速轮询保持低延迟, 空闲时短暂休眠省 CPU
+  if (ws_client_ && ws_client_->state() == nova::ws::WS_STATE_OPEN) {
+    if (last_data_ns_ > 0 && (NowNs() - last_data_ns_) < 500'000'000LL) {
+      std::this_thread::yield();
+    } else {
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
   }
   return running_;
 }
@@ -385,20 +467,7 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
         return;
       }
     }
-    // 退化: 匹配第一个同类型的订阅
-    for (size_t i = 0; i < state.subs.size(); ++i) {
-      if (state.subs[i].quote_type == qtype) {
-        di_mgr->Push(i, ptr, local_ns);
-        if (state.subs[i].trigger && state.strategy) {
-          if (++dispatch_cnt[exchange] <= 3)
-            WARNING_FLOG("[WSFeed] dispatch {} (fallback) qtype={} di={}", exchange_,
-                    (int)qtype, i);
-          state.strategy->on_datainfo(di_mgr, static_cast<int32_t>(i),
-                                       state.subs[i].position);
-        }
-        return;
-      }
-    }
+    // 无精确匹配订阅 → 数据对策略无用, 不 dispatch
     (void)size;
   };
 
@@ -790,6 +859,103 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
     }
     dispatch(NOVA_COIN_QUOTE_DEPTH, &depth, sizeof(depth));
     return;
+  }
+
+  // Gate.io JSON-RPC 格式
+  if (data.contains("method") && data.contains("params") &&
+      data["params"].is_array()) {
+    std::string method = data["method"].get<std::string>();
+    const auto &params = data["params"];
+
+    if (method == "depth.update" && params.size() >= 3) {
+      if (!params[1].is_object()) return;
+      const auto &d = params[1];
+      if (d.contains("bids") && d["bids"].is_array() && !d["bids"].empty() &&
+          d.contains("asks") && d["asks"].is_array() && !d["asks"].empty()) {
+        NovaCoinBBO bbo{};
+        if (inst_id.Valid()) bbo.instrument_id = inst_id;
+        auto get_px = [](const nlohmann::json &v) -> double {
+          return v.is_string() ? std::stod(v.get<std::string>()) : v.get<double>();
+        };
+        bbo.bid_price = get_px(d["bids"][0][0]);
+        bbo.bid_qty = get_px(d["bids"][0][1]);
+        bbo.ask_price = get_px(d["asks"][0][0]);
+        bbo.ask_qty = get_px(d["asks"][0][1]);
+        bbo.update_time =
+            static_cast<int64_t>(d.value("update", 0.0) * 1'000'000'000);
+        bbo.local_ns = local_ns;
+        dispatch(NOVA_COIN_QUOTE_BBO, &bbo, sizeof(bbo));
+      }
+      return;
+    }
+
+    if (method == "trades.update" && params.size() >= 2 &&
+        params[1].is_array()) {
+      for (auto &t : params[1]) {
+        if (!t.is_object()) continue;
+        NovaCoinTrade trade{};
+        if (inst_id.Valid()) trade.instrument_id = inst_id;
+        trade.price = t["price"].is_string()
+                          ? std::stod(t["price"].get<std::string>())
+                          : t["price"].get<double>();
+        trade.qty = t["amount"].is_string()
+                        ? std::stod(t["amount"].get<std::string>())
+                        : t["amount"].get<double>();
+        std::string side = t.value("type", "sell");
+        trade.side = (side == "buy") ? NOVA_SIDE_BUY : NOVA_SIDE_SELL;
+        trade.local_time =
+            static_cast<int64_t>(t.value("time", 0.0) * 1'000'000'000);
+        trade.local_ns = local_ns;
+        dispatch(NOVA_COIN_QUOTE_TRADE, &trade, sizeof(trade));
+      }
+      return;
+    }
+    // subscribe 确认或非行情消息跳过
+    return;
+  }
+
+  // MEXC 格式
+  if (data.contains("c") && data.contains("d")) {
+    std::string ch = data["c"].get<std::string>();
+    const auto &d = data["d"];
+    if (ch.find("bookTicker") != std::string::npos && d.is_object()) {
+      NovaCoinBBO bbo{};
+      if (inst_id.Valid()) bbo.instrument_id = inst_id;
+      auto get_num = [&](const char *key) -> double {
+        if (!d.contains(key)) return 0;
+        auto &v = d[key];
+        return v.is_string() ? std::stod(v.get<std::string>()) : v.get<double>();
+      };
+      bbo.bid_price = get_num("b");
+      bbo.bid_qty = get_num("B");
+      bbo.ask_price = get_num("a");
+      bbo.ask_qty = get_num("A");
+      bbo.update_time = local_ns;
+      bbo.local_ns = local_ns;
+      dispatch(NOVA_COIN_QUOTE_BBO, &bbo, sizeof(bbo));
+      return;
+    }
+    if (ch.find("deals") != std::string::npos && d.is_object() && d.contains("deals")) {
+      for (auto &t : d["deals"]) {
+        if (!t.is_object()) continue;
+        NovaCoinTrade trade{};
+        if (inst_id.Valid()) trade.instrument_id = inst_id;
+        trade.price = t["p"].is_string()
+                          ? std::stod(t["p"].get<std::string>())
+                          : t["p"].get<double>();
+        trade.qty = t["v"].is_string()
+                        ? std::stod(t["v"].get<std::string>())
+                        : t["v"].get<double>();
+        int side_int = t.value("S", 0);
+        trade.side = (side_int == 1) ? NOVA_SIDE_BUY : NOVA_SIDE_SELL;
+        trade.local_time = t.contains("t")
+            ? static_cast<int64_t>(t["t"].get<int64_t>() * 1'000'000)
+            : local_ns;
+        trade.local_ns = local_ns;
+        dispatch(NOVA_COIN_QUOTE_TRADE, &trade, sizeof(trade));
+      }
+      return;
+    }
   }
 }
 

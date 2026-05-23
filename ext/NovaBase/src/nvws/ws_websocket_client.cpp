@@ -190,7 +190,7 @@ public:
     return err;
   }
 
-  bool Poll() override { return ProcessReceive(); }
+  bool Poll() override { return state_ == WS_STATE_OPEN; }
 
 private:
   // 发送Ping

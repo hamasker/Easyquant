@@ -1,0 +1,65 @@
+{
+    "Server": {
+        "Log": {
+            "path": "/home/baser/Working/MX/Easyquant/log/mock2.log",
+            "file_level": "TRACE",
+            "file_level_real": "DEBUG",
+            "screen_level": "WARNING",
+            "async_log": false
+        },
+        "daemon": 0
+    },
+    "Trade": {
+        "TradeEngine": [
+            {
+                "name": "MockEngine",
+                "core": -1,
+                "match_delay_ms": 0,
+                "match_fill_ratio": 100,
+                "trade_merge_ms": 1,
+                "record_dir": ""
+            }
+        ]
+    },
+    "Quote": {
+        "binance":    { "enabled": false, "channels": ["bbo"], "core": -1 },
+        "binance_u":  { "enabled": true, "channels": ["bbo", "trade"], "core": -1 },
+        "kraken":     { "enabled": false, "channels": ["bbo"], "core": -1 },
+        "okex":       { "enabled": false, "channels": ["bbo"], "core": -1 },
+        "coinbase":   { "enabled": false, "channels": ["bbo"], "core": -1 },
+        "gateio": {
+            "enabled": true,
+            "queue": "NOVA_QUOTE_GATEIO_SPOT",
+            "channels": ["bbo", "trade"],
+            "core": -1
+        },
+        "mexc": {
+            "enabled": true,
+            "queue": "NOVA_QUOTE_MEXC_SPOT",
+            "channels": ["bbo", "trade"],
+            "core": -1
+        }
+    },
+    "Strategy": {
+        "path": "/home/baser/Working/MX/Easyquant/lib/libTakingDemo.so",
+        "Base": {
+            "root_dir": "/home/baser/Working/MX/Easyquant/",
+            "instruments": [
+                "btc_usdt_spot.gt",
+                "eth_usdt_spot.gt",
+                "btc_usdt_spot.mexc",
+                "eth_usdt_spot.mexc"
+            ],
+            "instruments_swap": ["btc_usdt_swap.bn"],
+            "krk_taker_fee": 0.0005,
+            "gt_taker_fee": 0.0002
+        },
+        "Verbose": {
+            "order": false,
+            "fp": false,
+            "ob": true,
+            "cuscore": false,
+            "tfi": false
+        }
+    }
+}

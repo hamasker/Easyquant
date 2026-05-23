@@ -62,10 +62,17 @@ std::string MakeExchangeSymbol(const InstrumentId &inst_id) {
   case NOVA_EXCHANGE_BINANCE:
     return t_lower + c_lower;
   case NOVA_EXCHANGE_KRAKE:
-    if (t_lower == "btc") ticker = "xbt";
-    std::transform(ticker.begin(), ticker.end(), ticker.begin(), ::toupper);
-    std::transform(currency.begin(), currency.end(), currency.begin(), ::toupper);
-    return ticker + "/" + currency;
+    // btc → xbt (唯一特殊转换)
+    if (t_lower == "btc") t_lower = "xbt";
+    // 长度>3且X/Z前缀 = Kraken API 全名 (XXBT→XBT, ZUSD→USD)
+    // 长度≤3 = 内部短名 (eth/xrp/sol), 不 strip
+    if (t_lower.size() > 3 && t_lower[0] == 'x')
+      t_lower.erase(0, 1);
+    if (c_lower.size() > 3 && (c_lower[0] == 'x' || c_lower[0] == 'z'))
+      c_lower.erase(0, 1);
+    std::transform(t_lower.begin(), t_lower.end(), t_lower.begin(), ::toupper);
+    std::transform(c_lower.begin(), c_lower.end(), c_lower.begin(), ::toupper);
+    return t_lower + "/" + c_lower;
   case NOVA_EXCHANGE_OK:
     std::transform(t_lower.begin(), t_lower.end(), t_lower.begin(), ::toupper);
     std::transform(c_lower.begin(), c_lower.end(), c_lower.begin(), ::toupper);
@@ -76,6 +83,16 @@ std::string MakeExchangeSymbol(const InstrumentId &inst_id) {
     std::transform(ticker.begin(), ticker.end(), ticker.begin(), ::toupper);
     std::transform(currency.begin(), currency.end(), currency.begin(), ::toupper);
     return ticker + "-" + currency;
+  case NOVA_EXCHANGE_GT:
+    // Gate.io: BASE_QUOTE 大写+下划线
+    std::transform(t_lower.begin(), t_lower.end(), t_lower.begin(), ::toupper);
+    std::transform(c_lower.begin(), c_lower.end(), c_lower.begin(), ::toupper);
+    return t_lower + "_" + c_lower;
+  case NOVA_EXCHANGE_MEXC:
+    // MEXC: BASEQUOTE 大写+无分隔符
+    std::transform(t_lower.begin(), t_lower.end(), t_lower.begin(), ::toupper);
+    std::transform(c_lower.begin(), c_lower.end(), c_lower.begin(), ::toupper);
+    return t_lower + c_lower;
   default:
     return ticker + currency;
   }
@@ -85,6 +102,10 @@ std::vector<std::string> DefaultChannelsForExchange(NOVA_EXCHANGE_TYPE exch) {
   switch (exch) {
   case NOVA_EXCHANGE_KRAKE:
     return {"bbo", "depth"};  // Kraken 需要 depth 做 FP
+  case NOVA_EXCHANGE_GT:
+    return {"bbo", "trade"};  // Gate.io 默认 BBO + trade
+  case NOVA_EXCHANGE_MEXC:
+    return {"bbo", "trade"};  // MEXC 默认 BBO + trade
   default:
     return {"bbo"};           // 其余默认只要 BBO
   }
@@ -107,6 +128,12 @@ StrategyRunner::StrategyRunner() { g_runner = this; }
 
 StrategyRunner::~StrategyRunner() {
   Stop();
+  delete strategy_;
+  strategy_ = nullptr;
+  for (auto *engine : engines_) {
+    delete engine;
+  }
+  engines_.clear();
   g_runner = nullptr;
 }
 
@@ -146,9 +173,11 @@ bool StrategyRunner::InitConfig() {
     server->config()->GetItemValue("Server.Log.screen_level", screen_lv);
     server->config()->GetItemValue("Server.Log.file_level", file_lv);
     if (!screen_lv.empty())
-      coinrunner::SetScreenLevel(coinrunner::LevelFromString(screen_lv.c_str()));
+      nova::log::SetScreenLevel(
+          static_cast<int>(nova::log::GetLogLevelFromString(screen_lv.c_str())));
     if (!file_lv.empty())
-      coinrunner::SetFileLevel(coinrunner::LevelFromString(file_lv.c_str()));
+      nova::log::SetFileLevel(
+          static_cast<int>(nova::log::GetLogLevelFromString(file_lv.c_str())));
     if (!log_path.empty()) {
       // 在 .log 前插入时间戳
       auto dot = log_path.rfind(".log");
@@ -159,12 +188,12 @@ bool StrategyRunner::InitConfig() {
         strftime(ts, sizeof(ts), "_%Y%m%d_%H%M%S", localtime(&tt));
         log_path.insert(dot, ts);
       }
-      coinrunner::SetLogFile(log_path.c_str());
+      nova::log::SetLogFile(log_path.c_str());
     }
 
     bool async_log = false;
     server->config()->GetItemValue("Server.Log.async_log", async_log);
-    if (async_log) coinrunner::SetAsync(true);
+    if (async_log) nova::log::SetAsync(true);
   }
   return true;
 }
@@ -274,7 +303,7 @@ bool StrategyRunner::InitEngines() {
     // 全是 MockEngine → 检查 Quote 判断 mock 还是 backtest
     bool has_quote = false, has_backtest = false;
     static const char *exch_sections[] = {"binance", "binance_u", "kraken",
-                                          "okex", "coinbase"};
+                                          "okex", "coinbase", "gateio", "mexc"};
     for (auto *sec : exch_sections) {
       bool en = false;
       cfg->GetItemValue((std::string("Quote.") + sec + ".enabled").c_str(), en);
@@ -394,6 +423,8 @@ bool StrategyRunner::InitProdFeeds() {
       {"kraken", NOVA_EXCHANGE_KRAKE, NOVA_COIN_INST_TYPE_SPOT, "krk"},
       {"okex", NOVA_EXCHANGE_OK, NOVA_COIN_INST_TYPE_SPOT, "ok"},
       {"coinbase", NOVA_EXCHANGE_COINBASE, NOVA_COIN_INST_TYPE_SPOT, "cb"},
+    {"gateio", NOVA_EXCHANGE_GT, NOVA_COIN_INST_TYPE_SPOT, "gt"},
+    {"mexc", NOVA_EXCHANGE_MEXC, NOVA_COIN_INST_TYPE_SPOT, "mexc"},
   };
 
   for (auto &ec : exch_configs) {

@@ -99,26 +99,6 @@ std::string version_to_str(version_t) { return "0.0.0.0"; }
 } // namespace base
 } // namespace nova
 
-// ========== DataProcess::extract_bar_data (by-value wrapper) ==========
-
-namespace DataProcess {
-
-void extract_bar_data(
-    const nova::quote::NovaCoinBar &md, data::bar_data dd,
-    std::unordered_map<uint16_t, data::delay_data> /*&delay_map*/) {
-  if (md.update_time < dd.server_ts)
-    return;
-  dd.server_ts = md.update_time;
-  dd.local_ts = md.local_time;
-  dd.valid = md.instrument_id.Valid();
-  dd.high = md.high;
-  dd.low = md.low;
-  dd.open = md.open;
-  dd.close = md.close;
-}
-
-} // namespace DataProcess
-
 // ========== MarkoutTable stubs ==========
 
 bool MarkoutTable::load_edges_csv(const std::string &) { return true; }

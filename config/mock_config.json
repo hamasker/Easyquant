@@ -83,6 +83,24 @@
                 "trade"
             ],
             "core": -1
+        },
+        "gateio": {
+            "enabled": false,
+            "queue": "NOVA_QUOTE_GATEIO_SPOT",
+            "channels": [
+                "bbo",
+                "trade"
+            ],
+            "core": -1
+        },
+        "mexc": {
+            "enabled": false,
+            "queue": "NOVA_QUOTE_MEXC_SPOT",
+            "channels": [
+                "bbo",
+                "trade"
+            ],
+            "core": -1
         }
     },
     "Strategy": {
@@ -115,7 +133,7 @@
         "Verbose": {
             "order": false,
             "fp": false,
-            "ob": true,
+            "ob": false,
             "cuscore": false,
             "tfi": false
         },
