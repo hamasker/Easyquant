@@ -18,6 +18,9 @@ import struct
 import sys
 import os
 import gzip
+import heapq
+import tempfile
+import shutil
 from pathlib import Path
 
 DATA_ROOT = Path("/data")
@@ -27,6 +30,8 @@ EXCHANGE_MAP = {
     "kraken": ("kraken", "krk"),
     "okex": ("okex", "ok"),
     "coinbase": ("coinbase", "cb"),
+    "gateio": ("gateio", "gt"),
+    "mexc": ("mexc", "mexc"),
 }
 
 # Binary record types
@@ -52,20 +57,31 @@ TRADE_FMT = "<ddbq"
 TRADE_SIZE = struct.calcsize(TRADE_FMT)
 
 def load_book_snapshots(exchange, symbol, dates):
-    """Load Parquet book_snapshot_5, yield (ts_ns, inst_id_28, depth_dict)"""
+    """Load Parquet book_snapshot_5, yield (ts_ns, row)"""
     import pandas as pd
     snap_dir = DATA_ROOT / exchange / "book_snapshot_5" / symbol.upper()
     if not snap_dir.is_dir():
         snap_dir = DATA_ROOT / exchange / "book_snapshot_5" / symbol
+    if not snap_dir.is_dir():
+        print(f"  WARNING: book_snapshot dir not found: {snap_dir}")
+        return
 
     for date in dates:
-        for f in sorted(snap_dir.glob(f"{date}*")):
+        files = sorted(snap_dir.glob(f"{date}*"))
+        if not files:
+            print(f"  WARNING: no files for {date} in {snap_dir}")
+            continue
+        for f in files:
             print(f"  Reading {f.name}...")
-            if f.suffix == ".parquet":
-                df = pd.read_parquet(f)
-            elif f.suffix == ".gz":
-                df = pd.read_csv(f)
-            else:
+            try:
+                if f.suffix == ".parquet":
+                    df = pd.read_parquet(f)
+                elif f.suffix == ".gz":
+                    df = pd.read_csv(f)
+                else:
+                    continue
+            except Exception as e:
+                print(f"  ERROR reading {f.name}: {e}")
                 continue
 
             for _, row in df.iterrows():
@@ -81,17 +97,27 @@ def load_trades(exchange, symbol, dates):
             trade_dir = d
             break
     if not trade_dir:
+        print(f"  WARNING: trade dir not found for {exchange}/{symbol}")
         return
 
     for date in dates:
-        for f in sorted(trade_dir.glob(f"{date}*.gz")):
+        files = sorted(trade_dir.glob(f"{date}*.gz"))
+        if not files:
+            print(f"  WARNING: no trade files for {date}")
+            continue
+        for f in files:
             print(f"  Reading {f.name}...")
-            with gzip.open(f, "rt") as fh:
-                header = fh.readline().strip()
-                cols = header.split(",")
-                for line in fh:
-                    parts = line.strip().split(",")
-                    yield {c: v for c, v in zip(cols, parts)}
+            try:
+                with gzip.open(f, "rt") as fh:
+                    header = fh.readline().strip()
+                    cols = header.split(",")
+                    for line in fh:
+                        parts = line.strip().split(",")
+                        if len(parts) >= len(cols):
+                            yield {c: v for c, v in zip(cols, parts)}
+            except Exception as e:
+                print(f"  ERROR reading {f.name}: {e}")
+                continue
 
 
 QUOTES = ["usdt", "usdc", "busd", "usd", "eur", "gbp", "btc", "eth", "sol", "xrp", "dai", "tusd"]
@@ -190,37 +216,95 @@ def main():
 
     import pandas as pd  # ensure pandas available
 
-    records = []
+    CHUNK = 500_000  # records per sorted chunk
+    tmpdir = tempfile.mkdtemp(prefix="btsort_")
+    chunk_files = []
+    chunk = []
+    total_records = 0
+
+    def flush_chunk():
+        """Sort current chunk and write to temp file"""
+        nonlocal chunk_files, chunk
+        if not chunk:
+            return
+        chunk.sort(key=lambda x: x[0])
+        tmpf = os.path.join(tmpdir, f"chunk_{len(chunk_files):04d}.bin")
+        with open(tmpf, "wb") as f:
+            for _, rec in chunk:
+                f.write(rec)
+        chunk_files.append(tmpf)
+        chunk.clear()
 
     # Load book_snapshots → depth + BBO records
     for ts_ns, row in load_book_snapshots(exchange, symbol, dates):
         ts = int(ts_ns)
-        records.append((ts, encode_bbo(ts, inst_id_28, row)))
-        records.append((ts, encode_depth(ts, inst_id_28, row)))
+        chunk.append((ts, encode_bbo(ts, inst_id_28, row)))
+        chunk.append((ts, encode_depth(ts, inst_id_28, row)))
+        total_records += 2
+        if len(chunk) >= CHUNK:
+            flush_chunk()
 
     # Load trades
     for row in load_trades(exchange, symbol, dates):
         ts_ns = int(row["timestamp"])
-        records.append((ts_ns, encode_trade(ts_ns, inst_id_28, row)))
+        chunk.append((ts_ns, encode_trade(ts_ns, inst_id_28, row)))
+        total_records += 1
+        if len(chunk) >= CHUNK:
+            flush_chunk()
 
-    # Sort by timestamp (chunked external sort for large datasets)
-    import tempfile
-    CHUNK = 500_000  # records per chunk
-    if len(records) > CHUNK:
-        print(f"  Sorting {len(records)} records via chunked external merge...")
-        records.sort(key=lambda x: x[0])
-        # Already sorted in memory if fits; for larger datasets would need merge-sort
-        # TODO: implement true external merge sort for 10M+ records
+    flush_chunk()  # final chunk
 
-    # Write binary file
+    print(f"  Total: {total_records} records in {len(chunk_files)} chunks")
+
+    # Merge sorted chunks → final file
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    total = 0
-    with open(out_path, "wb") as f:
-        for _, rec in records:
-            f.write(rec)
-            total += len(rec)
+    total_bytes = 0
 
-    print(f"\nDone: {len(records)} records → {out_path} ({total / 1024 / 1024:.1f} MB)")
+    if len(chunk_files) == 1:
+        shutil.move(chunk_files[0], out_path)
+        total_bytes = out_path.stat().st_size
+    else:
+        # Open all chunk files and read their first record
+        readers = []
+        for cf in chunk_files:
+            f = open(cf, "rb")
+            readers.append(f)
+
+        def _read_rec(f):
+            """Read one record: (ts_from_header, raw_bytes) or None"""
+            hdr = f.read(HDR_SIZE)
+            if len(hdr) < HDR_SIZE:
+                return None
+            rec_type = hdr[0]
+            body_sizes = {REC_BBO: BBO_SIZE, REC_DEPTH: DEPTH_SIZE, REC_TRADE: TRADE_SIZE}
+            body_len = body_sizes.get(rec_type, 0)
+            body = f.read(body_len) if body_len else b""
+            if len(body) < body_len:
+                return None
+            raw = hdr + body
+            ts = int(struct.unpack("<q", hdr[1:9])[0])
+            return (ts, raw)
+
+        heap = []
+        for i, f in enumerate(readers):
+            rec = _read_rec(f)
+            if rec:
+                heapq.heappush(heap, (rec[0], i, rec[1]))
+
+        with open(out_path, "wb") as outf:
+            while heap:
+                _, idx, raw = heapq.heappop(heap)
+                outf.write(raw)
+                total_bytes += len(raw)
+                next_rec = _read_rec(readers[idx])
+                if next_rec:
+                    heapq.heappush(heap, (next_rec[0], idx, next_rec[1]))
+
+        for f in readers:
+            f.close()
+
+    shutil.rmtree(tmpdir, ignore_errors=True)
+    print(f"\nDone: {total_records} records → {out_path} ({total_bytes / 1024 / 1024:.1f} MB)")
 
 if __name__ == "__main__":
     main()
