@@ -267,8 +267,8 @@ MapChannels(const std::string &exchange,
       else if (ch == "trade") out.push_back("trade");
       else out.push_back(ch);
     } else if (exchange == "kraken" || exchange == "krk") {
-      if (ch == "bbo") out.push_back("ticker");
-      else if (ch == "depth") out.push_back("book");  // depth=25 在 OnOpen 里设
+      if (ch == "bbo") out.push_back("spread");
+      else if (ch == "depth") out.push_back("book");
       else if (ch == "trade") out.push_back("trade");
       else out.push_back(ch);
     } else if (exchange == "okx" || exchange == "ok") {
@@ -621,6 +621,24 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
     trade.local_ns = local_ns;
     trade.side = payload->value("m", false) ? NOVA_SIDE_SELL : NOVA_SIDE_BUY;
     dispatch(NOVA_COIN_QUOTE_TRADE, &trade, sizeof(trade));
+    return;
+  }
+
+  // Kraken spread: [channelID, ["bid","ask","ts","bid_vol","ask_vol"], "spread", "pair"]
+  if (data.is_array() && data.size() >= 4 && data[1].is_array() &&
+      data[2].is_string() && data[2].get<std::string>() == "spread") {
+    const auto &s = data[1];
+    if (s.size() >= 5 && inst_id.Valid()) {
+      NovaCoinBBO bbo{};
+      bbo.instrument_id = inst_id;
+      bbo.bid_price = std::stod(s[0].get<std::string>());
+      bbo.ask_price = std::stod(s[1].get<std::string>());
+      bbo.bid_qty = std::stod(s[3].get<std::string>());
+      bbo.ask_qty = std::stod(s[4].get<std::string>());
+      bbo.update_time = local_ns;
+      bbo.local_ns = local_ns;
+      dispatch(NOVA_COIN_QUOTE_BBO, &bbo, sizeof(bbo));
+    }
     return;
   }
 
