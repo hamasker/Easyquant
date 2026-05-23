@@ -8,6 +8,8 @@
 #include "nova_trader_api.h"
 #include "base/base_async_log.h"
 
+#include "PushDataV3ApiWrapper.pb.h"
+
 #include <chrono>
 #include <cstdio>
 #include <thread>
@@ -190,12 +192,17 @@ public:
 
   void OnMessage(const char *msg, size_t len, int group) override {
     (void)group;
-    // debug: 打印 gateio/mexc 前几条原始消息
+    // debug: 打印 gateio 前几条原始消息
     if ((exchange_ == "gt" || exchange_ == "mexc") && len > 0) {
       static int _raw_cnt = 0;
       if (++_raw_cnt <= 5) {
-        std::string _raw(msg, std::min(len, (size_t)400));
-        WARNING_FLOG("[WSFeed] {} raw[{}]: {}", exchange_, _raw_cnt, _raw);
+        bool is_bin = (exchange_ == "mexc" && len > 0 && msg[0] != '{');
+        if (is_bin) {
+          WARNING_FLOG("[WSFeed] {} raw[{}]: binary {} bytes", exchange_, _raw_cnt, len);
+        } else {
+          std::string _raw(msg, std::min(len, (size_t)400));
+          WARNING_FLOG("[WSFeed] {} raw[{}]: {}", exchange_, _raw_cnt, _raw);
+        }
       }
     }
     // OKX/Coinbase 文本心跳: "ping" / "pong"
@@ -207,6 +214,16 @@ public:
     // Kraken 纯文本心跳
     if (len > 0 && msg[0] == '{' && strncmp(msg, "{\"event\":\"heartbeat\"", 21) == 0)
       return;
+    // Mexc 二进制 Protobuf 消息
+    if (exchange_ == "mexc" && len > 0 && msg[0] != '{') {
+      feed_.ProcessMexcProto(msg, len);
+      return;
+    }
+    // Mexc JSON ping: {"method":"PING"}
+    if (exchange_ == "mexc" && len > 10 && strncmp(msg, "{\"method\":\"PING\"}", 16) == 0) {
+      api_->Send("{\"method\":\"PONG\"}", 17, 0);
+      return;
+    }
     try {
       auto data = nlohmann::json::parse(std::string_view(msg, len));
       feed_.ProcessRawMessage(exchange_, data);
@@ -270,8 +287,8 @@ MapChannels(const std::string &exchange,
       else if (ch == "depth") out.push_back("depth");
       else out.push_back(ch);
     } else if (exchange == "mexc") {
-      if (ch == "bbo") out.push_back("spot@public.bookTicker.v3.api");
-      else if (ch == "trade") out.push_back("spot@public.deals.v3.api");
+      if (ch == "bbo") out.push_back("spot@public.aggre.bookTicker.v3.api.pb@100ms");
+      else if (ch == "trade") out.push_back("spot@public.aggre.deals.v3.api.pb");
       else out.push_back(ch);
     } else {
       out.push_back(ch);
@@ -309,7 +326,7 @@ bool WSFeed::Initialize(const nova::base::Config &cfg) {
   } else if (exchange_ == "gateio" || exchange_ == "gt") {
     ws_url_ = "wss://ws.gateio.ws/v4/ws";
   } else if (exchange_ == "mexc") {
-    ws_url_ = "wss://wbs.mexc.com/ws";
+    ws_url_ = "wss://wbs-api.mexc.com/ws";
   } else {
     ERROR_FLOG("[WSFeed] Unknown exchange: {}", exchange_);
     return false;
@@ -975,6 +992,106 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
       }
       return;
     }
+  }
+}
+
+void WSFeed::ProcessMexcProto(const char *data, size_t len) {
+  PushDataV3ApiWrapper wrapper;
+  if (!wrapper.ParseFromArray(data, static_cast<int>(len))) {
+    WARNING_FLOG("[WSFeed] mexc proto parse failed, {} bytes", len);
+    return;
+  }
+
+  last_data_ns_ = NowNs();
+
+  auto &state = MockServiceState::Instance();
+  auto *di_mgr = state.data_info_mgr;
+  if (!di_mgr) return;
+
+  int64_t local_ns = NowNs();
+  std::string channel = wrapper.channel();
+  std::string raw_sym = wrapper.has_symbol() ? wrapper.symbol() : "";
+
+  // symbol → InstrumentId
+  InstrumentId inst_id{};
+  if (!raw_sym.empty() && !symbol_to_inst_.empty()) {
+    auto it = symbol_to_inst_.find(raw_sym);
+    if (it != symbol_to_inst_.end()) {
+      inst_id = it->second;
+    } else {
+      std::string lower = raw_sym;
+      std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+      for (auto &[key, val] : symbol_to_inst_) {
+        std::string kl = key;
+        std::transform(kl.begin(), kl.end(), kl.begin(), ::tolower);
+        if (lower == kl) { inst_id = val; break; }
+      }
+    }
+  }
+
+  // dispatch helper
+  static std::unordered_map<std::string, int> dispatch_cnt_mx;
+  auto dispatch = [&](NOVA_COIN_QUOTE_TYPE qtype, const void *ptr, size_t size) {
+    for (size_t i = 0; i < state.subs.size(); ++i) {
+      if (state.subs[i].quote_type == qtype &&
+          state.subs[i].position &&
+          state.subs[i].position->instrument.key() == inst_id.key()) {
+        di_mgr->Push(i, ptr, local_ns);
+        if (state.subs[i].trigger && state.strategy) {
+          if (++dispatch_cnt_mx[channel] <= 3)
+            INFO_FLOG("[WSFeed] dispatch mexc qtype={} di={} inst={}", (int)qtype, i, raw_sym);
+          state.strategy->on_datainfo(di_mgr, static_cast<int32_t>(i),
+                                       state.subs[i].position);
+        }
+        if (qtype == NOVA_COIN_QUOTE_BBO && inst_id.Valid()) {
+          auto *bbo = static_cast<const NovaCoinBBO *>(ptr);
+          for (auto *engine : state.engines) {
+            auto *mock = dynamic_cast<MockTradeEngine *>(engine);
+            if (mock && engine->Exchange() == inst_id.exchange) {
+              mock->UpdateBBO(inst_id, bbo->bid_price, bbo->ask_price,
+                              bbo->bid_qty, bbo->ask_qty);
+            }
+          }
+        }
+        return;
+      }
+    }
+    (void)size;
+  };
+
+  // BBO (bookTicker)
+  if (channel.find("bookTicker") != std::string::npos &&
+      wrapper.has_publicaggrebookticker()) {
+    const auto &bt = wrapper.publicaggrebookticker();
+    NovaCoinBBO bbo{};
+    if (inst_id.Valid()) bbo.instrument_id = inst_id;
+    bbo.bid_price = std::stod(bt.bidprice());
+    bbo.bid_qty = std::stod(bt.bidquantity());
+    bbo.ask_price = std::stod(bt.askprice());
+    bbo.ask_qty = std::stod(bt.askquantity());
+    bbo.update_time = wrapper.has_sendtime()
+                          ? wrapper.sendtime() * 1'000'000
+                          : local_ns;
+    bbo.local_ns = local_ns;
+    dispatch(NOVA_COIN_QUOTE_BBO, &bbo, sizeof(bbo));
+    return;
+  }
+
+  // Trades (deals)
+  if (channel.find("deals") != std::string::npos &&
+      wrapper.has_publicaggredeals()) {
+    const auto &deals = wrapper.publicaggredeals();
+    for (auto &item : deals.deals()) {
+      NovaCoinTrade trade{};
+      if (inst_id.Valid()) trade.instrument_id = inst_id;
+      trade.price = std::stod(item.price());
+      trade.qty = std::stod(item.quantity());
+      trade.side = (item.tradetype() == 1) ? NOVA_SIDE_BUY : NOVA_SIDE_SELL;
+      trade.local_time = item.time() * 1'000'000;
+      trade.local_ns = local_ns;
+      dispatch(NOVA_COIN_QUOTE_TRADE, &trade, sizeof(trade));
+    }
+    return;
   }
 }
 

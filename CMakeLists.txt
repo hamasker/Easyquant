@@ -68,6 +68,17 @@ if(EXISTS ${PROJECT_SOURCE_DIR}/ext/coinsimulator)
     add_subdirectory(${PROJECT_SOURCE_DIR}/ext/coinsimulator)
 endif()
 
+# ========== Mexc Protobuf ==========
+find_package(Protobuf REQUIRED)
+file(GLOB MEXC_PROTO_SRCS "${PROJECT_SOURCE_DIR}/ext/mexc_proto/*.pb.cc")
+add_library(mexc_proto STATIC ${MEXC_PROTO_SRCS})
+target_include_directories(mexc_proto PUBLIC
+    ${PROTOBUF_INCLUDE_DIRS}
+    ${PROJECT_SOURCE_DIR}/ext/mexc_proto)
+target_link_libraries(mexc_proto PUBLIC ${PROTOBUF_LIBRARIES})
+target_compile_options(mexc_proto PRIVATE -Wno-unused-parameter -fPIC)
+target_compile_features(mexc_proto PRIVATE cxx_std_20)
+
 # IF(EXISTS ${PROJECT_SOURCE_DIR}/Relaxquant_Release)
 # FILE(COPY ${PROJECT_SOURCE_DIR}/include DESTINATION ${PROJECT_SOURCE_DIR}/Relaxquant_Release)
 # FILE(GLOB HERMES_LIBS ${PROJECT_SOURCE_DIR}/ext/Hermes_Release/lib/lib*.so)

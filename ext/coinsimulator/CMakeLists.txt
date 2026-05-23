@@ -53,7 +53,7 @@ target_include_directories(coinrunner_framework PRIVATE ${COINRUNNER_INCLUDES})
 
 # ========== 链接 ==========
 target_link_libraries(coinrunner PRIVATE coinrunner_framework nvws
-    ZLIB::ZLIB OpenSSL::SSL OpenSSL::Crypto pthread)
+    ZLIB::ZLIB OpenSSL::SSL OpenSSL::Crypto pthread mexc_proto)
 
 find_package(ZLIB REQUIRED)
 find_package(OpenSSL REQUIRED)

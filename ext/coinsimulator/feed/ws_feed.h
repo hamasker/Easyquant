@@ -37,6 +37,7 @@ public:
 
   // 由 WSFeedSpi 回调
   void ProcessRawMessage(const std::string &exchange, const nlohmann::json &data);
+  void ProcessMexcProto(const char *data, size_t len);
 
   const std::vector<std::string> &symbols() const { return symbols_; }
   const std::vector<std::string> &channels() const { return channels_; }
