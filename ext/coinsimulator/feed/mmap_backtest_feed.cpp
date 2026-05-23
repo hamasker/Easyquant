@@ -32,7 +32,7 @@ static constexpr size_t HDR_SIZE = 1 + 8 + 28; // 37
 static constexpr uint8_t REC_BBO   = 1;
 static constexpr uint8_t REC_DEPTH = 2;
 static constexpr uint8_t REC_TRADE = 3;
-static constexpr size_t BBO_BODY   = 32;  // bid_px(8) + bid_qty(8) + ask_px(8) + ask_qty(8)
+static constexpr size_t BBO_BODY   = 40;  // bid_px(8)+bid_qty(8)+ask_px(8)+ask_qty(8)+local_ns(8)
 static constexpr size_t DEPTH_BODY = 170;
 static constexpr size_t TRADE_BODY = 25;
 
@@ -240,16 +240,18 @@ void MmapBacktestFeed::DispatchRecord(const char *rec) {
     NovaCoinBBO bbo{};
     bbo.instrument_id = inst_id;
     double bid_px, bid_qty, ask_px, ask_qty;
+    int64_t bbo_local_ns;
     memcpy(&bid_px, body, 8);
     memcpy(&bid_qty, body + 8, 8);
     memcpy(&ask_px, body + 16, 8);
     memcpy(&ask_qty, body + 24, 8);
+    memcpy(&bbo_local_ns, body + 32, 8);
     bbo.bid_price = bid_px;
     bbo.bid_qty = bid_qty;
     bbo.ask_price = ask_px;
     bbo.ask_qty = ask_qty;
     bbo.update_time = ts_ns;
-    bbo.local_ns = local_ns;
+    bbo.local_ns = bbo_local_ns;
     dispatch(NOVA_COIN_QUOTE_BBO, &bbo);
   } else if (type == REC_DEPTH) {
     NovaCoinDepth depth{};

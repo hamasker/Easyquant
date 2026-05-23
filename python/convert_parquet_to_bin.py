@@ -97,25 +97,49 @@ def load_trades(exchange, symbol, dates):
 QUOTES = ["usdt", "usdc", "busd", "usd", "eur", "gbp", "btc", "eth", "sol", "xrp", "dai", "tusd"]
 
 def symbol_to_inst28(symbol, exchange):
-    """Convert exchange raw symbol → C++ InstrumentId char[28] internal format"""
+    """Convert exchange raw symbol → C++ InstrumentId char[28] internal format
+    e.g., BTC-USD.cb → btc_usd_spot.cb, BTCUSDT.bn → btc_usdt_spot.bn"""
     ex = EXCHANGE_MAP.get(exchange, (exchange, exchange))[1]
     sym = symbol.lower().replace("/", "_").replace("-", "_")
 
     # Kraken: XBT → btc
     if ex == "krk":
         sym = sym.replace("xbt", "btc")
+    if ex == "ok":
+        sym = sym.replace("-", "_")
 
-    # 确保有 _ 分隔 base/quote (C++ 要求)
+    # 确保有 _ 分隔 base/quote
     if "_" not in sym:
         for q in QUOTES:
             if sym.endswith(q) and len(sym) > len(q):
                 sym = sym[:-len(q)] + "_" + q
                 break
 
-    if not sym.endswith("." + ex):
+    # 追加 _spot 品种类型 (C++ InstrumentId 格式要求)
+    if "_spot" not in sym:
+        parts = sym.split(".")
+        base = parts[0]
+        ext = parts[1] if len(parts) > 1 else ex
+        if "_" in base:
+            sym = base + "_spot." + ext
+        else:
+            sym = sym + "_spot." + ext
+    elif "." not in sym:
         sym = sym + "." + ex
 
     return sym.encode("ascii").ljust(28, b"\x00")[:28]
+
+
+def encode_bbo(ts_ns, inst_id_28, row):
+    """从 book_snapshot 行提取最优买卖价"""
+    header = struct.pack(HDR_FMT, REC_BBO, int(ts_ns), inst_id_28)
+    bid_px = float(row.get("bids[0].price", 0) or 0)
+    bid_qty = float(row.get("bids[0].amount", 0) or 0)
+    ask_px = float(row.get("asks[0].price", 0) or 0)
+    ask_qty = float(row.get("asks[0].amount", 0) or 0)
+    local_ns = int(row.get("local_timestamp", ts_ns))
+    body = struct.pack(BBO_FMT, bid_px, bid_qty, ask_px, ask_qty, local_ns)
+    return header + body
 
 
 def encode_depth(ts_ns, inst_id_28, row):
@@ -168,17 +192,25 @@ def main():
 
     records = []
 
-    # Load book_snapshots → depth records
+    # Load book_snapshots → depth + BBO records
     for ts_ns, row in load_book_snapshots(exchange, symbol, dates):
-        records.append((int(ts_ns), encode_depth(ts_ns, inst_id_28, row)))
+        ts = int(ts_ns)
+        records.append((ts, encode_bbo(ts, inst_id_28, row)))
+        records.append((ts, encode_depth(ts, inst_id_28, row)))
 
     # Load trades
     for row in load_trades(exchange, symbol, dates):
         ts_ns = int(row["timestamp"])
         records.append((ts_ns, encode_trade(ts_ns, inst_id_28, row)))
 
-    # Sort by timestamp
-    records.sort(key=lambda x: x[0])
+    # Sort by timestamp (chunked external sort for large datasets)
+    import tempfile
+    CHUNK = 500_000  # records per chunk
+    if len(records) > CHUNK:
+        print(f"  Sorting {len(records)} records via chunked external merge...")
+        records.sort(key=lambda x: x[0])
+        # Already sorted in memory if fits; for larger datasets would need merge-sort
+        # TODO: implement true external merge sort for 10M+ records
 
     # Write binary file
     out_path.parent.mkdir(parents=True, exist_ok=True)

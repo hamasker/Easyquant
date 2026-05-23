@@ -18,7 +18,7 @@ BEGIN_NOVA_NAMESPACE(trade)
  *
  * 二进制格式 (每条 record):
  *   [type:1B][ts_ns:8B][inst_id:28B][data:N*8B]
- *   type=1 BBO    = 37 +  32 =  69B
+ *   type=1 BBO    = 37 +  40 =  77B
  *   type=2 Depth  = 37 + 170 = 207B
  *   type=3 Trade  = 37 +  25 =  62B
  */
