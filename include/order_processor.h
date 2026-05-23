@@ -23,9 +23,9 @@ public:
 
   // 公有方法
   void Init() {
-    if (!CFG_.backtest)
+    if (!CFG_.Strategy.backtest)
       ob_level = 100;
-    limit_usd = CFG_.limit_usd;
+    limit_usd = CFG_.Strategy.Stable.limit_usd;
   }
   data::fetch_orders_data fetch_orders(const data::currency &currency) const;
 
