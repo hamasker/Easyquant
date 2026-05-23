@@ -288,8 +288,8 @@ MapChannels(const std::string &exchange,
       else if (ch == "depth") out.push_back("depth");
       else out.push_back(ch);
     } else if (exchange == "mexc") {
-      if (ch == "bbo") out.push_back("spot@public.aggre.bookTicker.v3.api.pb@100ms");
-      else if (ch == "trade") out.push_back("spot@public.aggre.deals.v3.api.pb@100ms");
+      if (ch == "bbo") out.push_back("spot@public.aggre.bookTicker.v3.api.pb@10ms");
+      else if (ch == "trade") out.push_back("spot@public.aggre.deals.v3.api.pb@10ms");
       else out.push_back(ch);
     } else {
       out.push_back(ch);
