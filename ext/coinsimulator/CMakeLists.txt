@@ -55,6 +55,11 @@ target_include_directories(coinrunner_framework PRIVATE ${COINRUNNER_INCLUDES})
 target_link_libraries(coinrunner PRIVATE coinrunner_framework nvws
     ZLIB::ZLIB OpenSSL::SSL OpenSSL::Crypto pthread mexc_proto)
 
+# framework 也需要 protobuf include 路径
+target_include_directories(coinrunner_framework PRIVATE
+    ${PROJECT_SOURCE_DIR}/ext/mexc_proto
+    ${PROTOBUF_INCLUDE_DIRS})
+
 find_package(ZLIB REQUIRED)
 find_package(OpenSSL REQUIRED)
 
