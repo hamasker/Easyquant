@@ -104,6 +104,13 @@ bool TakingDemo::on_init(const Config *cfg) {
     return false;
   }
   INFO_FLOG("[OnInit]Sub quote success");
+
+  // 初始化 FP 引擎和订单引擎
+  fpg_ = std::make_unique<FairPriceGenerator>(fps_map_, InstData_, CFG_);
+  OP_ = std::make_unique<OrderProcessor>(InstData_, CFG_, fps_map_, BlcMng_, global_ts);
+  OP_->Init();
+  INFO_FLOG("[OnInit]FP generator and OrderProcessor initialized");
+
   scheduler_.init(CFG_.Strategy.Stable.negative_interval,
                   CFG_.Strategy.Stable.fp_turnover_usd,
                   CFG_.Strategy.Stable.order_turnover_usd,
@@ -217,13 +224,34 @@ void TakingDemo::do_calculations(int64_t current_ts) {
   }
 }
 
-void TakingDemo::process_disconnect(int64_t) {}
-void TakingDemo::process_negative(int64_t) {}
-void TakingDemo::process_fp(int64_t) {
-  // TODO: fpg_.update(ts)
+void TakingDemo::process_disconnect(int64_t ts) {
+  // 断连处理: 撤所有挂单
+  INFO_FLOG("[Strategy] disconnect detected, cancelling all orders");
+  cancel_orders(ts, "all");
 }
-void TakingDemo::process_order(int64_t) {
-  // TODO: OP.fetch_orders() → SendOrder
+
+void TakingDemo::process_negative(int64_t ts) {
+  // 负收益订单处理: 检查和撤销
+  if (CFG_.Strategy.Stable.cancel_negative || CFG_.Strategy.Stable.amend_negative) {
+    process_negative_orders();
+  }
+}
+
+void TakingDemo::process_fp(int64_t ts) {
+  // 拉取最新数据 → 计算 FP → 异常检测
+  DataProcess::fetch_data_all(last_data_info, InstData_, CFG_);
+  if (!fpg_->update(ts))
+    return;
+  fp_update_times++;
+  // FP 完成后触发 rebalance 判断
+  judge_rebalance_taker(CFG_.Strategy.Stable.rebalance_taker_method);
+}
+
+void TakingDemo::process_order(int64_t ts) {
+  // 预处理 → 下单
+  preprocess_orders();
+  process_orders();
+  submit_orders();
 }
 
 void TakingDemo::accumulate_turnover(const data::InstrumentComponent &IC,
@@ -476,3 +504,73 @@ void TakingDemo::on_order_accepted(const StrategyApi::OrderTp *order,
 
 void TakingDemo::on_order_amended(const StrategyApi::OrderTp *,
                                   const SecurityPosition *, int32_t) {}
+
+// ========== FP 框架方法 (stubs, 后续移植计算细节) ==========
+
+void TakingDemo::cancel_orders(int64_t ts, const std::string &method) {
+  // 撤单框架: 遍历所有挂单，按 method 决定撤哪些
+  INFO_FLOG("[Strategy] cancel_orders ts={} method={}", ts, method);
+  // TODO: 移植完整撤单逻辑
+}
+
+void TakingDemo::process_negative_orders() {
+  // 负收益订单检测和处理
+  // TODO: 移植具体计算逻辑
+}
+
+void TakingDemo::process_invalid_status_orders() {
+  // 清理异常状态订单
+}
+
+void TakingDemo::preprocess_orders() {
+  // 订单预处理: 更新保证金、成本、波动率
+  update_costs_transfers();
+  update_volatilities_fp(data::VolatilityMethod::METHOD_FP_DIFF_SHARED);
+}
+
+void TakingDemo::process_orders() {
+  // 生成订单逻辑
+  // TODO: 移植具体下单逻辑
+}
+
+void TakingDemo::submit_orders() {
+  // 提交订单到交易所
+  // TODO: 移植具体提交逻辑
+}
+
+void TakingDemo::submit_hedge_orders() {
+  // 提交对冲订单
+}
+
+bool TakingDemo::process_rebalance() {
+  // 再平衡处理
+  return false;
+}
+
+void TakingDemo::judge_rebalance_taker(const std::string &method) {
+  // 判断是否需要 rebalance/taker
+  (void)method;
+}
+
+void TakingDemo::update_costs_transfers() {
+  // 更新成本和转账
+}
+
+void TakingDemo::update_rate_limit() {
+  // 更新频率限制
+}
+
+void TakingDemo::update_volatilities_hl() {
+  if (fpg_) fpg_->update_volatilities_hl();
+}
+
+void TakingDemo::update_slope(data::slope_data &vd, double fp_bid, double fp_ask,
+                              const std::string &pair_str) {
+  if (fpg_) fpg_->update_slope(vd, fp_bid, fp_ask, pair_str);
+}
+
+bool TakingDemo::update_volatilities_fp(data::VolatilityMethod method) {
+  // TODO: 移植波动率更新
+  if (fpg_) return fpg_->update_volatilities_fp(method);
+  return false;
+}

@@ -26,6 +26,9 @@
   X(ok_taker_fee, double, 0.000175)                                            \
   X(krk_taker_fee, double, 0.0005)                                             \
   X(gt_taker_fee, double, 0.0)                                                 \
+  X(cancel_negative, bool, false)                                               \
+  X(amend_negative, bool, false)                                                \
+  X(rebalance_taker_method, std::string, "none")                                \
   X(trading_currencies_str, std::vector<std::string>,                          \
     constant::trading_currencies_str)                                          \
   X(digital_currencies_str, std::vector<std::string>,                          \

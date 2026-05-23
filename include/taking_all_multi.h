@@ -5,6 +5,8 @@
 #include "config_reloader.h"
 #include "configs/configs.h"
 #include "data_process.h"
+#include "fair_price_generator.h"
+#include "order_processor.h"
 #include "nova_trader_api.h"
 
 USE_NOVA_NAMESPACE(base)
@@ -64,6 +66,23 @@ public: // * 各类方法
   void accumulate_turnover(const data::InstrumentComponent &IC, double price,
                            double qty);
 
+  // FP 框架方法
+  void cancel_orders(int64_t ts, const std::string &method);
+  void process_negative_orders();
+  void process_invalid_status_orders();
+  void process_orders();
+  void preprocess_orders();
+  void submit_orders();
+  void submit_hedge_orders();
+  bool process_rebalance();
+  void judge_rebalance_taker(const std::string &method);
+  void update_costs_transfers();
+  void update_rate_limit();
+  void update_volatilities_hl();
+  void update_slope(data::slope_data &vd, double fp_bid, double fp_ask,
+                    const std::string &pair_str);
+  bool update_volatilities_fp(data::VolatilityMethod method);
+
   Configs CFG_;
   std::unique_ptr<nova::config::ConfigReloader> config_reloader_;
 
@@ -84,5 +103,10 @@ private:
 
   nova::ModuleScheduler scheduler_;
 
+  // FP 引擎 + 订单引擎
+  std::unique_ptr<FairPriceGenerator> fpg_;
+  std::unique_ptr<OrderProcessor> OP_;
+
   int64_t global_ts = 0;
+  int64_t fp_update_times = 0;
 };
