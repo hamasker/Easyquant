@@ -568,7 +568,10 @@ void StrategyRunner::Run() {
 
     // ── 空闲 ──
     t0 = NowNs();
-    std::this_thread::sleep_for(std::chrono::microseconds(500));
+    if (mode_ == "backtest")
+      std::this_thread::yield();      // 回测全速跑
+    else
+      std::this_thread::sleep_for(std::chrono::microseconds(500));  // 实盘省 CPU
     t_idle += NowNs() - t0;
     ++n_loops;
 
