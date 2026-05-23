@@ -428,15 +428,6 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
   auto *di_mgr = state.data_info_mgr;
   if (!di_mgr) return;
 
-  // Kraken 本地订单簿 (增量 → 全档合成)
-  static std::unordered_map<std::string,
-      std::pair<std::map<double, double, std::greater<double>>,
-                std::map<double, double>>> local_book;
-
-  // Coinbase 本地订单簿 (level2_batch 增量 → BBO 提取)
-  static std::unordered_map<std::string,
-      std::pair<std::map<double, double, std::greater<double>>,
-                std::map<double, double>>> cb_book;
 
   int64_t local_ns = NowNs();
 
@@ -649,7 +640,7 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
         (d.contains("a") && d["a"].is_array() && !d["a"].empty() &&
          d["a"][0].is_array())) {
       if (!inst_id.Valid()) return;
-      auto &[bids, asks] = local_book[inst_id.key()];
+      auto &[bids, asks] = local_book_[inst_id.key()];
       auto apply = [&](const nlohmann::json &arr, bool is_bid) {
         for (auto &entry : arr) {
           if (!entry.is_array() || entry.size() < 2) continue;
@@ -696,7 +687,7 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
     // Kraken depth (book snapshot: bs/as → 初始化本地订单簿)
     if ((d.contains("bs") || d.contains("as"))) {
       if (!inst_id.Valid()) return;
-      auto &[bids, asks] = local_book[inst_id.key()];
+      auto &[bids, asks] = local_book_[inst_id.key()];
       bids.clear(); asks.clear();
       auto fill = [](const nlohmann::json &arr, auto &map) {
         for (auto &entry : arr) {
@@ -839,7 +830,7 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
       std::string pair = evt.value("product_id", "");
       if (pair.empty()) continue;
 
-      auto &[bids, asks] = cb_book[pair];
+      auto &[bids, asks] = cb_book_[pair];
       bool is_snapshot = (etype == "snapshot");
       if (is_snapshot) { bids.clear(); asks.clear(); }
 

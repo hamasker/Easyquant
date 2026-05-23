@@ -64,6 +64,12 @@ private:
   int64_t last_data_ns_ = 0; // 最近一次收到数据的时间
   int retry_count_ = 0;        // 重连次数, 用于指数退避
   int core_ = -1;
+
+  // 本地订单簿 (增量更新 → 合成全档)
+  using OrderBook = std::pair<std::map<double, double, std::greater<double>>,
+                              std::map<double, double>>;
+  std::unordered_map<std::string, OrderBook> local_book_;   // Kraken
+  std::unordered_map<std::string, OrderBook> cb_book_;      // Coinbase
 };
 
 END_NOVA_NAMESPACE(trade)
