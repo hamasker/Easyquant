@@ -29,8 +29,12 @@ int64_t NowNs() {
 
 // Binary record: type(1B) + ts_ns(8B) + inst_id(28B) + data(...)
 static constexpr size_t HDR_SIZE = 1 + 8 + 28; // 37
+static constexpr uint8_t REC_BBO   = 1;
 static constexpr uint8_t REC_DEPTH = 2;
 static constexpr uint8_t REC_TRADE = 3;
+static constexpr size_t BBO_BODY   = 32;  // bid_px(8) + bid_qty(8) + ask_px(8) + ask_qty(8)
+static constexpr size_t DEPTH_BODY = 170;
+static constexpr size_t TRADE_BODY = 25;
 
 } // namespace
 
@@ -161,10 +165,12 @@ const char *MmapBacktestFeed::NextRecord() {
     int64_t ts_ns = *reinterpret_cast<const int64_t *>(rec + 1);
 
     size_t rec_size = HDR_SIZE;
-    if (type == REC_DEPTH)
-      rec_size += 170; // Depth body
+    if (type == REC_BBO)
+      rec_size += BBO_BODY;
+    else if (type == REC_DEPTH)
+      rec_size += DEPTH_BODY;
     else if (type == REC_TRADE)
-      rec_size += 25; // Trade body
+      rec_size += TRADE_BODY;
     else {
       cursor_ += HDR_SIZE; // skip unknown
       continue;
@@ -230,7 +236,22 @@ void MmapBacktestFeed::DispatchRecord(const char *rec) {
 
   const char *body = rec + HDR_SIZE;
 
-  if (type == REC_DEPTH) {
+  if (type == REC_BBO) {
+    NovaCoinBBO bbo{};
+    bbo.instrument_id = inst_id;
+    double bid_px, bid_qty, ask_px, ask_qty;
+    memcpy(&bid_px, body, 8);
+    memcpy(&bid_qty, body + 8, 8);
+    memcpy(&ask_px, body + 16, 8);
+    memcpy(&ask_qty, body + 24, 8);
+    bbo.bid_price = bid_px;
+    bbo.bid_qty = bid_qty;
+    bbo.ask_price = ask_px;
+    bbo.ask_qty = ask_qty;
+    bbo.update_time = ts_ns;
+    bbo.local_ns = local_ns;
+    dispatch(NOVA_COIN_QUOTE_BBO, &bbo);
+  } else if (type == REC_DEPTH) {
     NovaCoinDepth depth{};
     depth.instrument_id = inst_id;
     depth.update_time = ts_ns;
