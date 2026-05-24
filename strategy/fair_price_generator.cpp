@@ -484,8 +484,6 @@ bool FairPriceGenerator::update(const int64_t ts) {
       if (sum_util::Find(constant::available_forex, currency_str)) {
         if (CFG_.forex_method == "new")
           calculate_fp_forex(currency);
-        else
-          calculate_fp_forex_old(currency);
       } else if (sum_util::Find(constant::available_digital, currency_str)) {
         calculate_fp_digital(currency);
       }
@@ -502,162 +500,95 @@ bool FairPriceGenerator::update(const int64_t ts) {
     return true;
 }
 
+// ─── 路径一致性检测 ───
+static constexpr double kConsistencyBps = 2.0;
+static int check_path_consistency(double d_mid, double e_mid, double u_mid) {
+  double sorted[] = {d_mid, e_mid, u_mid};
+  std::sort(sorted, sorted + 3);
+  double med = sorted[1]; // median 抗单路径偏离
+  int mask = 0;
+  for (int i = 0; i < 3; ++i) {
+    double mids[] = {d_mid, e_mid, u_mid};
+    if (std::isfinite(mids[i]) && mids[i] > 0 &&
+        std::abs(mids[i] - med) / med * 10000.0 <= kConsistencyBps)
+      mask |= (1 << i);
+  }
+  return mask;
+}
+
 void FairPriceGenerator::calculate_fp_usdt() {
-  // auto start_time = std::chrono::high_resolution_clock::now();
-  // 1. 提取 depth 引用
-  const auto &id_usdtusd = id_map.at(
-      DataProcess::format_main_exchange_usd_pair("usdt", CFG_.aim_exchange));
-  const auto &id_usdteur =
-      id_map.at(DataProcess::format_main_exchange_cross_pair(
-          "usdt", "eur", CFG_.aim_exchange));
-  const auto &id_eurusd = id_map.at(
-      DataProcess::format_main_exchange_usd_pair("eur", CFG_.aim_exchange));
-  const auto &id_usdcusdt =
-      id_map.at(DataProcess::format_main_exchange_cross_pair(
-          "usdc", "usdt", CFG_.aim_exchange));
-  const auto &id_usdcusd = id_map.at(
-      DataProcess::format_main_exchange_usd_pair("usdc", CFG_.aim_exchange));
+  // 1. 提取 5 个 depth pair
+  const auto &id_d  = id_map.at(DataProcess::format_main_exchange_usd_pair("usdt", CFG_.aim_exchange));
+  const auto &id_te = id_map.at(DataProcess::format_main_exchange_cross_pair("usdt", "eur", CFG_.aim_exchange));
+  const auto &id_eu = id_map.at(DataProcess::format_main_exchange_usd_pair("eur", CFG_.aim_exchange));
+  const auto &id_ct = id_map.at(DataProcess::format_main_exchange_cross_pair("usdc", "usdt", CFG_.aim_exchange));
+  const auto &id_cu = id_map.at(DataProcess::format_main_exchange_usd_pair("usdc", CFG_.aim_exchange));
 
-  const auto &aim_usdtusd = depth_map.at(id_usdtusd);   // USDT_USD
-  const auto &aim_usdteur = depth_map.at(id_usdteur);   // USDT_EUR
-  const auto &aim_eurusd = depth_map.at(id_eurusd);     // EUR_USD
-  const auto &aim_usdcusdt = depth_map.at(id_usdcusdt); // USDC_USDT
-  const auto &aim_usdcusd = depth_map.at(id_usdcusd);   // USDC_USD
+  const auto &dd  = depth_map.at(id_d);
+  const auto &dte = depth_map.at(id_te);
+  const auto &deu = depth_map.at(id_eu);
+  const auto &dct = depth_map.at(id_ct);
+  const auto &dcu = depth_map.at(id_cu);
 
+  // 数据时效检查
   InstData_.abnormal_status = data::abnormal_status::NORMAL;
-  if (!aim_usdtusd.valid || !aim_usdteur.valid || !aim_eurusd.valid ||
-      !aim_usdcusdt.valid || !aim_usdcusd.valid ||
-      this->ts_tmp - aim_usdtusd.local_ts > NS_5S ||
-      this->ts_tmp - aim_usdteur.local_ts > NS_5S ||
-      this->ts_tmp - aim_eurusd.local_ts > NS_5S ||
-      this->ts_tmp - aim_usdcusdt.local_ts > NS_5S ||
-      this->ts_tmp - aim_usdcusd.local_ts > NS_5S) [[unlikely]] {
-    ERROR_FLOG("abnormal usdt fp calculation: invalid depth! aim_usdtusd={}, "
-               "aim_usdteur={}, aim_eurusd={}, aim_usdcusdt={}, "
-               "aim_usdcusd={}, this->ts_tmp={}, aim_usdtusd_local_ts={}, "
-               "aim_usdteur_local_ts={}, aim_eurusd_local_ts={}, "
-               "aim_usdcusdt_local_ts={}, aim_usdcusd_local_ts={}",
-               aim_usdtusd.valid, aim_usdteur.valid, aim_eurusd.valid,
-               aim_usdcusdt.valid, aim_usdcusd.valid, this->ts_tmp,
-               aim_usdtusd.local_ts, aim_usdteur.local_ts, aim_eurusd.local_ts,
-               aim_usdcusdt.local_ts, aim_usdcusd.local_ts);
-    InstData_.abnormal_status = data::abnormal_status::AIM_EXCH_INVALID;
-    return;
-  }
-  // 2. 统一构造 USDT/USD 的 Level 列表
-  // 为了性能，这里用 thread_local 复用内存，避免频繁分配
-  static thread_local std::vector<Level> levels_bid;
-  static thread_local std::vector<Level> levels_ask;
-  levels_bid.clear();
-  levels_ask.clear();
-  if (levels_bid.capacity() < 256) [[unlikely]] {
-    levels_bid.reserve(256);
-  }
-  if (levels_ask.capacity() < 256) [[unlikely]] {
-    levels_ask.reserve(256);
-  }
-
-  append_direct_usdtusd_levels(aim_usdtusd, DepNum10, levels_bid, levels_ask);
-
-  append_eur_path_levels(aim_usdteur, aim_eurusd, DepNum10, DepNum5, levels_bid,
-                         levels_ask);
-
-  append_usdc_path_levels(aim_usdcusdt, aim_usdcusd, DepNum10, DepNum5,
-                          levels_bid, levels_ask);
-
-  // （可选）这里可以给 EUR 路径 / USDC 路径再做一次"cost 调整"，
-  // 比如对多腿产生的 Level price 做 +/- 常数 or 乘 (1 ± fee)，
-  // 可以按 taker_fee 或历史 slippage 来校准。
-  // 省略实现，先跑起来看效果。
-
-  // 检查是否有足够的有效数据
-  if (levels_bid.empty() || levels_ask.empty()) [[unlikely]] {
-    ERROR_FLOG("abnormal usdt fp calculation: empty levels! bids={}, asks={}",
-               levels_bid.size(), levels_ask.size());
+  auto stale = [&](const auto &d) { return !d.valid || ts_tmp - d.local_ts > NS_5S; };
+  if (stale(dd) || stale(dte) || stale(deu) || stale(dct) || stale(dcu)) [[unlikely]] {
+    ERROR_FLOG("abnormal usdt fp: stale depth");
     InstData_.abnormal_status = data::abnormal_status::AIM_EXCH_INVALID;
     return;
   }
 
-  // 3. 求 equilibrium fp_usdt_bid / fp_usdt_ask
-  double fp_buy = std::numeric_limits<double>::quiet_NaN();
-  double fp_sell = std::numeric_limits<double>::quiet_NaN();
+  // 2. 三路径独立 mid → 一致性检测
+  auto mid = [](double b1, double a1, double b2, double a2, auto fn) {
+    return (fn(b1, b2) + fn(a1, a2)) * 0.5;
+  };
+  double d_mid = mid(dd.bids[0][0], dd.asks[0][0], 0, 0, [](double p, double) { return p; });
+  double e_mid = mid(dte.bids[0][0], dte.asks[0][0], deu.bids[0][0], deu.asks[0][0],
+                     [](double a, double b) { return a * b; });
+  double u_mid = mid(dct.bids[0][0], dct.asks[0][0], dcu.bids[0][0], dcu.asks[0][0],
+                     [](double a, double b) { return b / a; });
 
-  bool ok = solve_equilibrium_price(levels_bid, levels_ask, fp_buy, fp_sell);
-  if (!ok || !std::isfinite(fp_buy) || !std::isfinite(fp_sell)) {
-    ERROR_FLOG("abnormal usdt fp calculation! ok={}, fp_buy={}, fp_sell={}, "
-               "bids_count={}, asks_count={}",
-               ok, fp_buy, fp_sell, levels_bid.size(), levels_ask.size());
-
-    // 输出一些调试信息
-    if (!levels_bid.empty() && !levels_ask.empty()) {
-      double max_bid = std::numeric_limits<double>::lowest();
-      double min_bid = std::numeric_limits<double>::max();
-      double max_ask = std::numeric_limits<double>::lowest();
-      double min_ask = std::numeric_limits<double>::max();
-      size_t valid_bids = 0;
-      size_t valid_asks = 0;
-
-      for (const auto &l : levels_bid) {
-        if (std::isfinite(l.price) && l.price > 0.0) {
-          if (l.price > max_bid)
-            max_bid = l.price;
-          if (l.price < min_bid)
-            min_bid = l.price;
-          if (std::isfinite(l.qty) && l.qty > 0.0)
-            valid_bids++;
-        }
-      }
-      for (const auto &l : levels_ask) {
-        if (std::isfinite(l.price) && l.price > 0.0) {
-          if (l.price > max_ask)
-            max_ask = l.price;
-          if (l.price < min_ask)
-            min_ask = l.price;
-          if (std::isfinite(l.qty) && l.qty > 0.0)
-            valid_asks++;
-        }
-      }
-
-      ERROR_FLOG("Debug: max_bid={}, min_bid={}, max_ask={}, min_ask={}, "
-                 "spread={}, valid_bids={}, valid_asks={}",
-                 max_bid, min_bid, max_ask, min_ask,
-                 (min_ask > max_bid ? min_ask - max_bid : -1.0), valid_bids,
-                 valid_asks);
-    }
-
+  int mask = check_path_consistency(d_mid, e_mid, u_mid);
+  if (mask == 0) [[unlikely]] {
+    ERROR_FLOG("abnormal usdt fp: all 3 paths diverged d={:.6f} e={:.6f} u={:.6f}", d_mid, e_mid, u_mid);
     InstData_.abnormal_status = data::abnormal_status::AIM_EXCH_INVALID;
     return;
   }
 
+  // 3. 只构造通过检测的路径 Levels
+  std::vector<Level> bids, asks;
+  bids.reserve(128); asks.reserve(128);
+  if (mask & 1) append_direct_usdtusd_levels(dd, DepNum10, bids, asks);
+  if (mask & 2) append_eur_path_levels(dte, deu, DepNum10, DepNum5, bids, asks);
+  if (mask & 4) append_usdc_path_levels(dct, dcu, DepNum10, DepNum5, bids, asks);
+
+  if (bids.empty() || asks.empty()) [[unlikely]] {
+    ERROR_FLOG("abnormal usdt fp: empty levels mask={}", mask);
+    InstData_.abnormal_status = data::abnormal_status::AIM_EXCH_INVALID;
+    return;
+  }
+
+  // 4. solve equilibrium
+  double fp_buy = NAN, fp_sell = NAN;
+  if (!solve_equilibrium_price(bids, asks, fp_buy, fp_sell) ||
+      !std::isfinite(fp_buy) || !std::isfinite(fp_sell)) [[unlikely]] {
+    ERROR_FLOG("abnormal usdt fp: equilibrium failed mask={}", mask);
+    InstData_.abnormal_status = data::abnormal_status::AIM_EXCH_INVALID;
+    return;
+  }
+
+  // 5. 存储
   std::array<double, 2> fp = {fp_buy, fp_sell};
-  double vp = 0.5 * (fp_buy + fp_sell);
-  if (CFG_.verbose_fp) [[unlikely]]
-    DEBUG_FLOG("[new]usdt fp_bid: {}, fp_ask: {}, ob_bid: {}, ob_ask: {}",
-               fp_buy, fp_sell, aim_usdtusd.bids[0][0], aim_usdtusd.asks[0][0]);
-
-  // 这里沿用你原来的写法，把 fp / vp 存进 CircularBuffer
-  fps_map_[data::currency::USDT].timestamps.add(this->ts_tmp);
+  fps_map_[data::currency::USDT].timestamps.add(ts_tmp);
   fps_map_[data::currency::USDT].fps.add(fp);
-  fps_map_[data::currency::USDT].vps.add(vp);
-  auto *IC = InstData_.IM.FindByUniId(id_usdtusd);
-  IC->fp_bid = fp[0];
-  IC->fp_ask = fp[1];
+  fps_map_[data::currency::USDT].vps.add((fp_buy + fp_sell) * 0.5);
+  InstData_.IM.FindByUniId(id_d)->fp_bid = fp[0];
+  InstData_.IM.FindByUniId(id_d)->fp_ask = fp[1];
 
-  // // 性能统计
-  // auto end_time = std::chrono::high_resolution_clock::now();
-  // auto duration_ns = static_cast<uint64_t>(
-  //     std::chrono::duration_cast<std::chrono::nanoseconds>(end_time -
-  //                                                          start_time)
-  //         .count());
-  // usdt_fp_perf_stats.new_method_count.fetch_add(1);
-  // usdt_fp_perf_stats.new_method_total_ns.fetch_add(duration_ns);
-  // uint64_t new_max = usdt_fp_perf_stats.new_method_max_ns.load();
-  // while (duration_ns > new_max &&
-  //        !usdt_fp_perf_stats.new_method_max_ns.compare_exchange_weak(
-  //            new_max, duration_ns)) {
-  //   // CAS loop
-  // }
-  // usdt_fp_perf_stats.report();
+  if (CFG_.verbose_fp) [[unlikely]]
+    DEBUG_FLOG("usdt fp: [{:.6f}, {:.6f}] mask={} d={:.6f} e={:.6f} u={:.6f}",
+               fp_buy, fp_sell, mask, d_mid, e_mid, u_mid);
 }
 
 namespace {
@@ -785,7 +716,7 @@ calculate_weighted_price(const BboDepthData &bd, data::depths_data *depth_wp,
 //   - inst_str: 交易对字符串，用于判断是否以 usdt 结尾
 //   - usdt_usd_bid: USDT/USD 的 bid 价格（用于转换）
 //   - usdt_usd_ask: USDT/USD 的 ask 价格（用于转换）
-//   - this->volume_threshold: 成交量阈值
+//   - this->/*volume_threshold*/ 0.0: 成交量阈值
 //   - fp_usdt: USDT 的公平价格 [bid, ask]（用于 USDT 交易对的成交量计算，可选）
 // 返回：转换后的加权价格 [bid, ask]（如果以 usdt 结尾，已转换为 usd）
 inline std::array<double, 2>
@@ -1068,202 +999,6 @@ void FairPriceGenerator::calculate_fp_forex(const data::currency &currency) {
   }
 }
 
-void FairPriceGenerator::calculate_fp_forex_old(
-    const data::currency &currency) {
-  const auto &use_depth = DepNum10;
-  const auto &currency_str = data::get_currency_name(currency);
-  const auto &fp_usdt = fps_map_[data::currency::USDT].fps.get_latest();
-  const auto &fp_usdc = fps_map_[data::currency::USDC].fps.get_latest();
-
-  const auto &id_aim_Cusd =
-      id_map.at(DataProcess::format_main_exchange_usd_pair(currency_str,
-                                                           CFG_.aim_exchange));
-  const auto &id_aim_usdtC =
-      id_map.at(DataProcess::format_main_exchange_cross_pair(
-          "usdt", currency_str, CFG_.aim_exchange));
-  const auto &id_aim_usdcC =
-      id_map.at(DataProcess::format_main_exchange_cross_pair(
-          "usdc", currency_str, CFG_.aim_exchange));
-  const auto &aim_Cusd = depth_map.at(id_aim_Cusd);
-  const auto &aim_usdtC = depth_map.at(id_aim_usdtC);
-  const auto &aim_usdcC = depth_map.at(id_aim_usdcC);
-
-  // aim.<currency>/usd 10档
-  const auto &aim_Cusd_bids =
-      trunc_depth_data<use_depth>(aim_Cusd, Dtype::BID, use_depth);
-  const auto &aim_Cusd_asks =
-      trunc_depth_data<use_depth>(aim_Cusd, Dtype::ASK, use_depth);
-  auto aim_usdtC_bids =
-      trunc_depth_data<use_depth>(aim_usdtC, Dtype::BID, use_depth);
-  auto aim_usdtC_asks =
-      trunc_depth_data<use_depth>(aim_usdtC, Dtype::ASK, use_depth);
-  std::transform(aim_usdtC_bids.begin(), aim_usdtC_bids.end(),
-                 aim_usdtC_bids.begin(), [](double x) { return 1.0 / x; });
-  std::transform(aim_usdtC_asks.begin(), aim_usdtC_asks.end(),
-                 aim_usdtC_asks.begin(), [](double x) { return 1.0 / x; });
-  auto aim_usdcC_bids =
-      trunc_depth_data<use_depth>(aim_usdcC, Dtype::BID, use_depth);
-  auto aim_usdcC_asks =
-      trunc_depth_data<use_depth>(aim_usdcC, Dtype::ASK, use_depth);
-  std::transform(aim_usdcC_bids.begin(), aim_usdcC_bids.end(),
-                 aim_usdcC_bids.begin(), [](double x) { return 1.0 / x; });
-  std::transform(aim_usdcC_asks.begin(), aim_usdcC_asks.end(),
-                 aim_usdcC_asks.begin(), [](double x) { return 1.0 / x; });
-  // 初始化 NaN 值的 bids 和 asks
-  const auto &aim_Cusdc_bids = sum_util::Multiply(aim_usdcC_asks, fp_usdc[0]);
-  const auto &aim_Cusdc_asks = sum_util::Multiply(aim_usdcC_bids, fp_usdc[1]);
-  const auto &aim_Cusdt_bids = sum_util::Multiply(aim_usdtC_asks, fp_usdt[0]);
-  const auto &aim_Cusdt_asks = sum_util::Multiply(aim_usdtC_bids, fp_usdt[1]);
-
-  std::array<double, 3 * use_depth> bids;
-  std::array<double, 3 * use_depth> asks;
-  std::copy(aim_Cusd_bids.begin(), aim_Cusd_bids.end(), bids.begin());
-  std::copy(aim_Cusdc_bids.begin(), aim_Cusdc_bids.end(),
-            bids.begin() + use_depth);
-  std::copy(aim_Cusdt_bids.begin(), aim_Cusdt_bids.end(),
-            bids.begin() + 2 * use_depth);
-  std::copy(aim_Cusd_asks.begin(), aim_Cusd_asks.end(), asks.begin());
-  std::copy(aim_Cusdc_asks.begin(), aim_Cusdc_asks.end(),
-            asks.begin() + use_depth);
-  std::copy(aim_Cusdt_asks.begin(), aim_Cusdt_asks.end(),
-            asks.begin() + 2 * use_depth);
-
-  // 从小到大对 asks 排序
-  std::sort(asks.begin(), asks.end());
-  // 从大到小对 bids 排序
-  std::sort(bids.begin(), bids.end(), std::greater<double>());
-  double fp_bid = NAN;
-  double fp_ask = NAN;
-  for (size_t i = 0; i < bids.size(); ++i) {
-    // 如果找到 NaN 值就跳过
-    if (std::isnan(asks[i]) || std::isnan(bids[i]))
-      break;
-    // 找到合适的买卖价差
-    if (asks[i] >= bids[i]) {
-      fp_bid = bids[i];
-      fp_ask = asks[i]; // todo: 加入median判断
-      break;
-    }
-  }
-  std::array<double, 2> fp = {-1.0, -1.0}; // 初始化为 [-1.0, -1.0]
-  // 检查 NaN 和 Inf
-  if (std::isfinite(fp_bid) && std::isfinite(fp_ask)) {
-    fp[0] = std::min(fp_bid, fp_ask);
-    fp[1] = std::max(fp_bid, fp_ask);
-  } else
-    ERROR_FLOG("abnormal {} fp calculation!", currency_str);
-  fps_map_[currency].timestamps.add(this->ts_tmp);
-  if (CFG_.verbose_fp) [[unlikely]]
-    DEBUG_FLOG("[new]{} fp_bid: {}, fp_ask: {}, ob_bid: {}, ob_ask: {}",
-               currency_str, fp_bid, fp_ask, aim_Cusd.bids[0][0],
-               aim_Cusd.asks[0][0]);
-  if (CFG_.flag_ib) {
-    const auto &id_ib =
-        id_map.at(fmt::format("{}_usd_cash.idealpro", currency_str));
-    auto &ib_data = bbo_map.at(id_ib);
-    // fp_forex_IB stubbed — fp stays unchanged
-  }
-  fps_map_[currency].fps.add(fp);
-  fps_map_[currency].vps.add((fp[0] + fp[1]) * 0.5);
-}
-
-void FairPriceGenerator::calculate_fp_digital_old(
-    const data::currency &currency) {
-  const auto &currency_str = data::get_currency_name(currency);
-  const auto &fp_usdt = fps_map_[data::currency::USDT].fps.get_latest();
-
-  const auto &id_bn_Cusdt = id_map.at(fmt::format("{}_usdt.bn", currency_str));
-  const auto &id_ok_Cusdt = id_map.at(fmt::format("{}_usdt.ok", currency_str));
-  const auto &id_cb_Cusd = id_map.at(fmt::format("{}_usd.cb", currency_str));
-  const auto &id_cb_usdtusd = id_map.at("usdt_usd.cb");
-
-  const auto &bbo_bn_Cusdt = bbo_map.at(id_bn_Cusdt);
-  const auto &bbo_ok_Cusdt = bbo_map.at(id_ok_Cusdt);
-  const auto &bbo_cb_Cusd = bbo_map.at(id_cb_Cusd);
-  const auto &bbo_cb_usdtusd = bbo_map.at(id_cb_usdtusd);
-
-  const int8_t &ts_len_bn_Cusdt = bbo_bn_Cusdt.ticker_len;
-  const int8_t &ts_len_ok_Cusdt = bbo_ok_Cusdt.ticker_len;
-  const int8_t &ts_len_cb_Cusd = bbo_cb_Cusd.ticker_len;
-  double ts_bn_Cusdt = std::pow(10, -ts_len_bn_Cusdt);
-  double ts_ok_Cusdt = std::pow(10, -ts_len_ok_Cusdt);
-  double ts_cb_Cusd = std::pow(10, -ts_len_cb_Cusd);
-  double tf_bn_Cusdt = bbo_bn_Cusdt.taker_fee;
-  double tf_ok_Cusdt = bbo_ok_Cusdt.taker_fee;
-  double tf_cb_Cusd = bbo_cb_Cusd.taker_fee;
-
-  const auto &bn_Cusdt_bid = bbo_bn_Cusdt.bid;
-  const auto &bn_Cusdt_ask = bbo_bn_Cusdt.ask;
-  const auto &bn_Cusdt_bidv = bn_Cusdt_bid[1] * bn_Cusdt_bid[0] * fp_usdt[0];
-  const auto &bn_Cusdt_askv = bn_Cusdt_ask[1] * bn_Cusdt_ask[0] * fp_usdt[1];
-  const double &ema_bidv_bn_Cusdt = bbo_bn_Cusdt.ema_bidv * 0.1;
-  const double &ema_askv_bn_Cusdt = bbo_bn_Cusdt.ema_askv * 0.1;
-  const auto &ok_Cusdt_bid = bbo_ok_Cusdt.bid;
-  const auto &ok_Cusdt_ask = bbo_ok_Cusdt.ask;
-  const auto &ok_Cusdt_bidv = ok_Cusdt_bid[1] * ok_Cusdt_bid[0] * fp_usdt[0];
-  const auto &ok_Cusdt_askv = ok_Cusdt_ask[1] * ok_Cusdt_ask[0] * fp_usdt[1];
-  const double &ema_bidv_ok_Cusdt = bbo_ok_Cusdt.ema_bidv * 0.1;
-  const double &ema_askv_ok_Cusdt = bbo_ok_Cusdt.ema_askv * 0.1;
-  const auto &cb_Cusd_bid = bbo_cb_Cusd.bid;
-  const auto &cb_Cusd_ask = bbo_cb_Cusd.ask;
-  const auto &cb_Cusd_bidv = cb_Cusd_bid[1] * cb_Cusd_bid[0];
-  const auto &cb_Cusd_askv = cb_Cusd_ask[1] * cb_Cusd_ask[0];
-  const double &ema_bidv_cb_Cusd = bbo_cb_Cusd.ema_bidv * 0.1;
-  const double &ema_askv_cb_Cusd = bbo_cb_Cusd.ema_askv * 0.1;
-  const auto &cb_usdtusd_bid = bbo_cb_usdtusd.bid[0];
-  const auto &cb_usdtusd_ask = bbo_cb_usdtusd.ask[0];
-
-  const auto &wp_bn_Cusdt_tmp = weighted_price_bbo( // bn.<currency>/usdt.wp
-      bn_Cusdt_ask[0], bn_Cusdt_askv, bn_Cusdt_bid[0], bn_Cusdt_bidv,
-      ts_bn_Cusdt, tf_bn_Cusdt, ema_bidv_bn_Cusdt, ema_askv_bn_Cusdt);
-  const double &wp_bn_Cusdt_bid = (wp_bn_Cusdt_tmp[0] < 0)
-                                      ? bn_Cusdt_bid[0] - 30 * ts_bn_Cusdt
-                                      : wp_bn_Cusdt_tmp[0];
-  const double &wp_bn_Cusdt_ask = (wp_bn_Cusdt_tmp[1] < 0)
-                                      ? bn_Cusdt_ask[0] + 30 * ts_bn_Cusdt
-                                      : wp_bn_Cusdt_tmp[1];
-  const auto &wp_ok_Cusdt_tmp = weighted_price_bbo( // ok.<currency>/usdt.wp
-      ok_Cusdt_ask[0], ok_Cusdt_askv, ok_Cusdt_bid[0], ok_Cusdt_bidv,
-      ts_ok_Cusdt, tf_ok_Cusdt, ema_bidv_ok_Cusdt, ema_askv_ok_Cusdt);
-  const double &wp_ok_Cusdt_bid = (wp_ok_Cusdt_tmp[0] < 0)
-                                      ? ok_Cusdt_bid[0] - 30 * ts_ok_Cusdt
-                                      : wp_ok_Cusdt_tmp[0];
-  const double &wp_ok_Cusdt_ask = (wp_ok_Cusdt_tmp[1] < 0)
-                                      ? ok_Cusdt_ask[0] + 30 * ts_ok_Cusdt
-                                      : wp_ok_Cusdt_tmp[1];
-  const auto &wp_cb_Cusd_tmp = weighted_price_bbo( // cb.<currency>/usd.wp
-      cb_Cusd_ask[0], cb_Cusd_askv, cb_Cusd_bid[0], cb_Cusd_bidv, ts_cb_Cusd,
-      tf_cb_Cusd, ema_bidv_cb_Cusd, ema_askv_cb_Cusd);
-  const double &wp_cb_Cusd_bid = (wp_cb_Cusd_tmp[0] < 0)
-                                     ? cb_Cusd_bid[0] - 30 * ts_cb_Cusd
-                                     : wp_cb_Cusd_tmp[0];
-  const double &wp_cb_Cusd_ask = (wp_cb_Cusd_tmp[1] < 0)
-                                     ? cb_Cusd_ask[0] + 30 * ts_cb_Cusd
-                                     : wp_cb_Cusd_tmp[1];
-
-  // 初始化 NaN 值的 bids 和 asks
-  std::vector<double> bids(3, std::numeric_limits<double>::quiet_NaN());
-  std::vector<double> asks(3, std::numeric_limits<double>::quiet_NaN());
-  bids = {wp_bn_Cusdt_bid, wp_ok_Cusdt_bid, wp_cb_Cusd_bid / cb_usdtusd_ask};
-  asks = {wp_bn_Cusdt_ask, wp_ok_Cusdt_ask, wp_cb_Cusd_ask / cb_usdtusd_bid};
-
-  double fp_bid = sum_util::CalMedian(bids) * fp_usdt[0];
-  double fp_ask = sum_util::CalMedian(asks) * fp_usdt[1];
-
-  std::array<double, 2> fp{-1.0}; // 初始化为 [-1.0, -1.0]
-  // 检查 NaN 和 Inf
-  if (std::isfinite(fp_bid) && std::isfinite(fp_ask)) {
-    fp[0] = std::min(fp_bid, fp_ask);
-    fp[1] = std::max(fp_bid, fp_ask);
-  } else {
-    ERROR_FLOG("abnormal {} fp calculation!", currency_str);
-  }
-  fps_map_[currency].timestamps.add(this->ts_tmp);
-  fps_map_[currency].fps.add(fp);
-  double vp = {(fp[0] + fp[1]) * 0.5};
-  fps_map_[currency].vps.add(vp);
-}
-
 inline digital_fp::Quote2 make_q2(const std::array<double, 2> &wp, uint64_t ts,
                                   const std::array<double, 2> &median = {
                                       -1.0, -1.0}) {
@@ -1489,285 +1224,6 @@ void FairPriceGenerator::calculate_fp_digital(const data::currency &currency) {
   }
 }
 
-void FairPriceGenerator::calculate_fp_digital_swap(
-    const data::currency &currency) {
-  const auto &currency_str = data::get_currency_name(currency);
-  const auto &fp_usdt = fps_map_[data::currency::USDT].fps.get_latest();
-
-  const auto &inst_bn_Cusdt = fmt::format("{}_usdt_swap.bn", currency_str);
-  const auto &inst_ok_Cusdt = fmt::format("{}_usdt_swap.ok", currency_str);
-  const auto &inst_cb_Cusd = fmt::format("{}_usd.cb", currency_str);
-  const auto &inst_cb_usdtusd = "usdt_usd.cb";
-
-  const auto &id_bn_Cusdt = id_map.at(inst_bn_Cusdt);
-  const auto &id_ok_Cusdt = id_map.at(inst_ok_Cusdt);
-  const auto &id_cb_Cusd = id_map.at(inst_cb_Cusd);
-  const auto &id_cb_usdtusd = id_map.at(inst_cb_usdtusd);
-
-  const auto &bbo_bn_Cusdt = bbo_map.at(id_bn_Cusdt);
-  const auto &bbo_ok_Cusdt = bbo_map.at(id_ok_Cusdt);
-  const auto &bbo_cb_Cusd = bbo_map.at(id_cb_Cusd);
-  const auto &bbo_cb_usdtusd = bbo_map.at(id_cb_usdtusd);
-
-  const auto &depth_bn_Cusdt = depth_map.at(id_bn_Cusdt);
-  const auto &depth_ok_Cusdt = depth_map.at(id_ok_Cusdt);
-  const auto &depth_cb_Cusd = depth_map.at(id_cb_Cusd);
-
-  const int8_t &ts_len_bn_Cusdt = depth_bn_Cusdt.ticker_len;
-  const int8_t &ts_len_ok_Cusdt = depth_ok_Cusdt.ticker_len;
-  const int8_t &ts_len_cb_Cusd = depth_cb_Cusd.ticker_len;
-  const auto &ts_bn_Cusdt = std::pow(10, -ts_len_bn_Cusdt);
-  const auto &ts_ok_Cusdt = std::pow(10, -ts_len_ok_Cusdt);
-  const auto &ts_cb_Cusd = std::pow(10, -ts_len_cb_Cusd);
-  const double &tf_bn_Cusdt = bbo_bn_Cusdt.taker_fee;
-  const double &tf_ok_Cusdt = bbo_ok_Cusdt.taker_fee;
-  const double &tf_cb_Cusd = bbo_cb_Cusd.taker_fee;
-  double ema_bidv_bn_Cusdt = this->volume_threshold;
-  double ema_askv_bn_Cusdt = this->volume_threshold;
-  double ema_bidv_ok_Cusdt = this->volume_threshold;
-  double ema_askv_ok_Cusdt = this->volume_threshold;
-  double ema_bidv_cb_Cusd = this->volume_threshold;
-  double ema_askv_cb_Cusd = this->volume_threshold;
-
-  const auto &bn_Cusdt_bids =
-      trunc_depth_data<DepNum5>(depth_bn_Cusdt, Dtype::BID);
-  const auto &bn_Cusdt_asks =
-      trunc_depth_data<DepNum5>(depth_bn_Cusdt, Dtype::ASK);
-  const auto &bn_Cusdt_bidsq =
-      trunc_depth_data<DepNum5>(depth_bn_Cusdt, Dtype::BID_QUANTITY);
-  const auto &bn_Cusdt_asksq =
-      trunc_depth_data<DepNum5>(depth_bn_Cusdt, Dtype::ASK_QUANTITY);
-  const auto &bn_Cusdt_bidsv =
-      sum_util::Multiply(bn_Cusdt_bidsq, bn_Cusdt_bids[0] * fp_usdt[0]);
-  const auto &bn_Cusdt_asksv =
-      sum_util::Multiply(bn_Cusdt_asksq, bn_Cusdt_asks[0] * fp_usdt[1]);
-  const auto &ok_Cusdt_bids =
-      trunc_depth_data<DepNum5>(depth_ok_Cusdt, Dtype::BID);
-  const auto &ok_Cusdt_asks =
-      trunc_depth_data<DepNum5>(depth_ok_Cusdt, Dtype::ASK);
-  const auto &ok_Cusdt_bidsq =
-      trunc_depth_data<DepNum5>(depth_ok_Cusdt, Dtype::BID_QUANTITY);
-  const auto &ok_Cusdt_asksq =
-      trunc_depth_data<DepNum5>(depth_ok_Cusdt, Dtype::ASK_QUANTITY);
-  const auto &ok_Cusdt_bidsv =
-      sum_util::Multiply(ok_Cusdt_bidsq, ok_Cusdt_bids[0] * fp_usdt[0]);
-  const auto &ok_Cusdt_asksv =
-      sum_util::Multiply(ok_Cusdt_asksq, ok_Cusdt_asks[0] * fp_usdt[1]);
-  const auto &cb_Cusd_bids =
-      trunc_depth_data<DepNum5>(depth_cb_Cusd, Dtype::BID);
-  const auto &cb_Cusd_asks =
-      trunc_depth_data<DepNum5>(depth_cb_Cusd, Dtype::ASK);
-  const auto &cb_Cusd_bidsq =
-      trunc_depth_data<DepNum5>(depth_cb_Cusd, Dtype::BID_QUANTITY);
-  const auto &cb_Cusd_asksq =
-      trunc_depth_data<DepNum5>(depth_cb_Cusd, Dtype::ASK_QUANTITY);
-  const auto &cb_Cusd_bidsv =
-      sum_util::Multiply(cb_Cusd_bidsq, cb_Cusd_bids[0]);
-  const auto &cb_Cusd_asksv =
-      sum_util::Multiply(cb_Cusd_asksq, cb_Cusd_asks[0]);
-  const auto &cb_usdtusd_bid0 = bbo_cb_usdtusd.bid[0];
-  const auto &cb_usdtusd_ask0 = bbo_cb_usdtusd.ask[0];
-
-  const auto &wp_bn_Cusdt =
-      weighted_price_depth<DepNum5>( // bn.<currency>/usdt.wp
-          bn_Cusdt_asks, bn_Cusdt_asksv, bn_Cusdt_bids, bn_Cusdt_bidsv,
-          ts_bn_Cusdt, tf_bn_Cusdt, ema_bidv_bn_Cusdt, ema_askv_bn_Cusdt);
-  const auto &wp_ok_Cusdt =
-      weighted_price_depth<DepNum5>( // ok.<currency>/usdt.wp
-          ok_Cusdt_asks, ok_Cusdt_asksv, ok_Cusdt_bids, ok_Cusdt_bidsv,
-          ts_ok_Cusdt, tf_ok_Cusdt, ema_bidv_ok_Cusdt, ema_askv_ok_Cusdt);
-  const auto &wp_cb_Cusd =
-      weighted_price_depth<DepNum5>( // cb.<currency>/usd.wp
-          cb_Cusd_asks, cb_Cusd_asksv, cb_Cusd_bids, cb_Cusd_bidsv, ts_cb_Cusd,
-          tf_cb_Cusd, ema_bidv_cb_Cusd, ema_askv_cb_Cusd);
-
-  double fp_bid, fp_ask;
-  {
-    std::vector<double> bids(9, std::numeric_limits<double>::quiet_NaN());
-    std::vector<double> asks(9, std::numeric_limits<double>::quiet_NaN());
-    const auto &bn_Cusdt_bid = bbo_bn_Cusdt.bid;
-    const auto &bn_Cusdt_ask = bbo_bn_Cusdt.ask;
-    const auto &bn_Cusdt_bidv = bn_Cusdt_bid[0] * bn_Cusdt_bid[1] * fp_usdt[0];
-    const auto &bn_Cusdt_askv = bn_Cusdt_ask[0] * bn_Cusdt_ask[1] * fp_usdt[1];
-    const double &ema_bidv_bn_Cusdt = bbo_bn_Cusdt.ema_bidv * 0.1;
-    const double &ema_askv_bn_Cusdt = bbo_bn_Cusdt.ema_askv * 0.1;
-    const auto &ok_Cusdt_bid = bbo_ok_Cusdt.bid;
-    const auto &ok_Cusdt_ask = bbo_ok_Cusdt.ask;
-    const auto &ok_Cusdt_bidv = ok_Cusdt_bid[0] * ok_Cusdt_bid[1] * fp_usdt[0];
-    const auto &ok_Cusdt_askv = ok_Cusdt_ask[0] * ok_Cusdt_ask[1] * fp_usdt[1];
-    const double &ema_bidv_ok_Cusdt = bbo_ok_Cusdt.ema_bidv * 0.1;
-    const double &ema_askv_ok_Cusdt = bbo_ok_Cusdt.ema_askv * 0.1;
-    const auto &cb_Cusd_bid = bbo_cb_Cusd.bid[0];
-    const auto &cb_Cusd_ask = bbo_cb_Cusd.ask[0];
-    const auto &cb_Cusd_bidv = bbo_cb_Cusd.bid[0] * bbo_cb_Cusd.bid[1];
-    const auto &cb_Cusd_askv = bbo_cb_Cusd.ask[0] * bbo_cb_Cusd.ask[1];
-    const double &ema_bidv_cb_Cusd = bbo_cb_Cusd.ema_bidv * 0.1;
-    const double &ema_askv_cb_Cusd = bbo_cb_Cusd.ema_askv * 0.1;
-
-    const auto &cb_usdtusd_bid = cb_usdtusd_bid0;
-    const auto &cb_usdtusd_ask = cb_usdtusd_ask0;
-
-    const auto &wp_bn_Cusdt_tmp = weighted_price_bbo( // bn.<currency>/usdt.wp
-        bn_Cusdt_ask[0], bn_Cusdt_askv, bn_Cusdt_bid[0], bn_Cusdt_bidv,
-        ts_bn_Cusdt, tf_bn_Cusdt, ema_bidv_bn_Cusdt, ema_askv_bn_Cusdt);
-    const double &wp_bn_Cusdt_bid = (wp_bn_Cusdt_tmp[0] < 0)
-                                        ? bn_Cusdt_bid[0] - 30 * ts_bn_Cusdt
-                                        : wp_bn_Cusdt_tmp[0];
-    const double &wp_bn_Cusdt_ask = (wp_bn_Cusdt_tmp[1] < 0)
-                                        ? bn_Cusdt_ask[0] + 30 * ts_bn_Cusdt
-                                        : wp_bn_Cusdt_tmp[1];
-    const auto &wp_ok_Cusdt_tmp = weighted_price_bbo( // ok.<currency>/usdt.wp
-        ok_Cusdt_ask[0], ok_Cusdt_askv, ok_Cusdt_bid[0], ok_Cusdt_bidv,
-        ts_ok_Cusdt, tf_ok_Cusdt, ema_bidv_ok_Cusdt, ema_askv_ok_Cusdt);
-    const double &wp_ok_Cusdt_bid = (wp_ok_Cusdt_tmp[0] < 0)
-                                        ? ok_Cusdt_bid[0] - 30 * ts_ok_Cusdt
-                                        : wp_ok_Cusdt_tmp[0];
-    const double &wp_ok_Cusdt_ask = (wp_ok_Cusdt_tmp[1] < 0)
-                                        ? ok_Cusdt_ask[0] + 30 * ts_ok_Cusdt
-                                        : wp_ok_Cusdt_tmp[1];
-    const auto &wp_cb_Cusd_tmp = weighted_price_bbo( // cb.<currency>/usd.wp
-        cb_Cusd_ask, cb_Cusd_askv, cb_Cusd_bid, cb_Cusd_bidv, ts_cb_Cusd,
-        tf_cb_Cusd, ema_bidv_cb_Cusd, ema_askv_cb_Cusd);
-    const double &wp_cb_Cusd_bid = (wp_cb_Cusd_tmp[0] < 0)
-                                       ? cb_Cusd_bid - 30 * ts_cb_Cusd
-                                       : wp_cb_Cusd_tmp[0];
-    const double &wp_cb_Cusd_ask = (wp_cb_Cusd_tmp[1] < 0)
-                                       ? cb_Cusd_ask + 30 * ts_cb_Cusd
-                                       : wp_cb_Cusd_tmp[1];
-    bids = {wp_bn_Cusdt_bid, wp_ok_Cusdt_bid, wp_cb_Cusd_bid / cb_usdtusd_ask,
-            wp_bn_Cusdt[0],  wp_ok_Cusdt[0],  wp_cb_Cusd[0] / cb_usdtusd_ask0,
-            bn_Cusdt_bid[0], ok_Cusdt_bid[0], cb_Cusd_bid / cb_usdtusd_ask0};
-    asks = {wp_bn_Cusdt_ask, wp_ok_Cusdt_ask, wp_cb_Cusd_ask / cb_usdtusd_bid,
-            wp_bn_Cusdt[1],  wp_ok_Cusdt[1],  wp_cb_Cusd[1] / cb_usdtusd_bid0,
-            bn_Cusdt_ask[0], ok_Cusdt_ask[0], cb_Cusd_ask / cb_usdtusd_bid0};
-
-    fp_bid = sum_util::CalMedian(bids) * fp_usdt[0];
-    fp_ask = sum_util::CalMedian(asks) * fp_usdt[1];
-  }
-
-  std::array<double, 2> fp = {-1.0}; // 初始化为 [-1.0, -1.0]
-  // 检查 NaN 和 Inf
-  if (std::isfinite(fp_bid) && std::isfinite(fp_ask)) {
-    fp[0] = std::min(fp_bid, fp_ask);
-    fp[1] = std::max(fp_bid, fp_ask);
-  } else {
-    ERROR_FLOG("abnormal {} fp calculation!", currency_str);
-  }
-  fps_map_[currency].timestamps.add(this->ts_tmp);
-  fps_map_[currency].fps.add(fp);
-  double vp = {(fp[0] + fp[1]) * 0.5};
-  fps_map_[currency].vps.add(vp);
-}
-
-void FairPriceGenerator::update_volatilities_hl() {
-  for (auto &one : vol_map) {
-    // auto &pair_str = one.first;
-    auto &vd = one.second;
-
-    double bid_amp = (vd.bid_high > 0) ? vd.bid_high - vd.bid_low : 0.0;
-    double ask_amp = (vd.ask_high > 0) ? vd.ask_high - vd.ask_low : 0.0;
-    if (vd.ask_high > 0) {
-      vd.bid_high = -1;
-      vd.bid_low = 1e6;
-      vd.ask_high = -1;
-      vd.ask_low = 1e6;
-    }
-    vd.vol_bid_50ms =
-        (vd.vol_bid_50ms < 0)
-            ? 0.0
-            : (1 - ema_fast_alpha) * vd.vol_bid_50ms + ema_fast_alpha * bid_amp;
-    vd.vol_ask_50ms =
-        (vd.vol_ask_50ms < 0)
-            ? 0.0
-            : (1 - ema_fast_alpha) * vd.vol_ask_50ms + ema_fast_alpha * ask_amp;
-    vd.vol_bid_hl = std::sqrt(vd.vol_bid_50ms * 60);
-    vd.vol_ask_hl = std::sqrt(vd.vol_ask_50ms * 60);
-    vd.vol_rate_bid_hl = vd.vol_bid_hl / (0.5 * (vd.bid_high + vd.bid_low));
-    vd.vol_rate_ask_hl = vd.vol_ask_hl / (0.5 * (vd.ask_high + vd.ask_low));
-  }
-}
-
-void FairPriceGenerator::update_slope(data::slope_data &sd,
-                                      const double &fp_bid,
-                                      const double &fp_ask,
-                                      const std::string &inst_str) {
-  sd.fps_fast_begin.add({fp_bid, fp_ask});
-  sd.fps_begin.add({fp_bid, fp_ask});
-  if (sd.fps_fast_begin.is_full_) {
-    const auto &fps_fast_begin = sd.fps_fast_begin.get_earliest();
-    const auto log_ret_fast_bid = log(fp_bid) - log(fps_fast_begin[0]);
-    const auto log_ret_fast_ask = log(fp_ask) - log(fps_fast_begin[1]);
-    sd.log_ret_fast_bid = (sd.log_ret_fast_bid == 0)
-                              ? log_ret_fast_bid
-                              : (1 - sd.alpha_fast) * sd.log_ret_fast_bid +
-                                    sd.alpha_fast * log_ret_fast_bid;
-    sd.log_ret_fast_ask = (sd.log_ret_fast_ask == 0)
-                              ? log_ret_fast_ask
-                              : (1 - sd.alpha_fast) * sd.log_ret_fast_ask +
-                                    sd.alpha_fast * log_ret_fast_ask;
-    sd.log_ret_vol_fast_bid =
-        (sd.log_ret_vol_fast_bid == 0)
-            ? sum_util::VSquare(sd.log_ret_fast_bid)
-            : (1 - sd.alpha_vol_fast) * sd.log_ret_vol_fast_bid +
-                  sd.alpha_vol_fast * sum_util::VSquare(sd.log_ret_fast_bid);
-    sd.log_ret_vol_fast_ask =
-        (sd.log_ret_vol_fast_ask == 0)
-            ? sum_util::VSquare(sd.log_ret_fast_ask)
-            : (1 - sd.alpha_vol_fast) * sd.log_ret_vol_fast_ask +
-                  sd.alpha_vol_fast * sum_util::VSquare(sd.log_ret_fast_ask);
-    sd.slope_fast_bid =
-        (sd.log_ret_vol_fast_bid == 0)
-            ? 1.0
-            : sd.log_ret_fast_bid / (std::sqrt(sd.log_ret_vol_fast_bid) * 1.0);
-    sd.slope_fast_ask =
-        (sd.log_ret_vol_fast_ask == 0)
-            ? 1.0
-            : sd.log_ret_fast_ask / (std::sqrt(sd.log_ret_vol_fast_ask) * 1.0);
-    sd.factor_fast_bid =
-        sd.factor_min +
-        (sd.factor_max - sd.factor_min) *
-            (1.0 - std::exp(-sd.k * std::abs(sd.slope_fast_bid)));
-    sd.factor_fast_ask =
-        sd.factor_min +
-        (sd.factor_max - sd.factor_min) *
-            (1.0 - std::exp(-sd.k * std::abs(sd.slope_fast_ask)));
-    sd.slope_fast_cnt++;
-    if (this->first_cal)
-      INFO_FLOG("inst: {}, slope_bid: {}, fp_bid: {}", inst_str,
-                sd.slope_fast_bid, fp_bid);
-  }
-  if (sd.fps_begin.is_full_) {
-    const auto &fps_begin = sd.fps_begin.get_earliest();
-    const auto log_ret_bid = log(fp_bid) - log(fps_begin[0]);
-    const auto log_ret_ask = log(fp_ask) - log(fps_begin[1]);
-    sd.log_ret_bid = (sd.log_ret_bid == 0) ? log_ret_bid
-                                           : (1 - sd.alpha) * sd.log_ret_bid +
-                                                 sd.alpha * log_ret_bid;
-    sd.log_ret_ask = (sd.log_ret_ask == 0) ? log_ret_ask
-                                           : (1 - sd.alpha) * sd.log_ret_ask +
-                                                 sd.alpha * log_ret_ask;
-    sd.log_ret_vol_bid =
-        (sd.log_ret_vol_bid == 0)
-            ? sum_util::VSquare(sd.log_ret_bid)
-            : (1 - sd.alpha_vol) * sd.log_ret_vol_bid +
-                  sd.alpha_vol * sum_util::VSquare(sd.log_ret_bid);
-    sd.log_ret_vol_ask =
-        (sd.log_ret_vol_ask == 0)
-            ? sum_util::VSquare(sd.log_ret_ask)
-            : (1 - sd.alpha_vol) * sd.log_ret_vol_ask +
-                  sd.alpha_vol * sum_util::VSquare(sd.log_ret_ask);
-    sd.slope_bid = 0;
-    sd.slope_ask = 0;
-    sd.factor_bid =
-        sd.factor_min + (sd.factor_max - sd.factor_min) *
-                            (1.0 - std::exp(-sd.k * std::abs(sd.slope_bid)));
-    sd.factor_ask =
-        sd.factor_min + (sd.factor_max - sd.factor_min) *
-                            (1.0 - std::exp(-sd.k * std::abs(sd.slope_ask)));
-    sd.slope_cnt++;
-  }
-}
-
 // bool FairPriceGenerator::update_volatilities_fp(data::VolatilityMethod
 // method) {
 //   bool flag_ready = false;
@@ -1935,143 +1391,6 @@ void FairPriceGenerator::update_slope(data::slope_data &sd,
 //   }
 //   return flag_ready;
 // }
-
-bool FairPriceGenerator::update_volatilities_fp(data::VolatilityMethod method) {
-  constexpr double init_bps = 1.0;
-  const double init_r = init_bps * 1e-4;
-  const double init_r2 = init_r * init_r;
-  bool flag_ready = false;
-  for (auto &one : vol_map) {
-    const auto &id = one.first;
-    auto *IC = InstData_.IM.FindByUniId(id);
-    const auto &dd = depth_map.at(id);
-    auto &vd = one.second;
-    if (vd.vol_cnt < 50) {
-      flag_ready = false;
-      vd.vol_cnt++;
-    } else
-      flag_ready = true;
-    auto &sd = vd.slope;
-    auto &cc = vd.cuscore;
-    const auto &base = IC->base;
-    const auto &fp_bid = IC->fp_bid;
-    const auto &fp_ask = IC->fp_ask;
-    if (CFG_.flag_slope)
-      update_slope(sd, fp_bid, fp_ask, IC->inst_str);
-
-    // ===== 1) 用 fp_mid 的 log-return，拆分正负 =====
-    const double fp_mid = 0.5 * (fp_bid + fp_ask);
-
-    double r = 0.0;
-    double prev_mid = 0.5 * (vd.fp_bid + vd.fp_ask);
-    if (vd.fp_bid >= 0 && vd.fp_ask >= 0) {
-      if (prev_mid > 0.0 && fp_mid > 0.0) {
-        r = std::log(fp_mid / prev_mid); // per base_ms step
-      }
-    }
-
-    const double rp = (r > 0.0) ? r : 0.0;  // up
-    const double rn = (r < 0.0) ? -r : 0.0; // down (positive)
-    const double r2_up = (vd.fp_ask < 0) ? init_r2 : (rp * rp);
-    const double r2_dn = (vd.fp_bid < 0) ? init_r2 : (rn * rn);
-
-    // ===== 2) 快慢 EMA（方差），bid用down，ask用up =====
-    if (vd.vol_bid_fp_fast < 0) {
-      vd.ema_bid_fast = r2_dn;
-      vd.ema_ask_fast = r2_up;
-      vd.ema_bid_slow = r2_dn;
-      vd.ema_ask_slow = r2_up;
-    } else {
-      calculate_util::EMAStepInplace(vd.ema_bid_fast, r2_dn, ema_fast_alpha2);
-      calculate_util::EMAStepInplace(vd.ema_ask_fast, r2_up, ema_fast_alpha2);
-      calculate_util::EMAStepInplace(vd.ema_bid_slow, vd.ema_bid_fast,
-                                     ema_fast_alpha); // todo
-      calculate_util::EMAStepInplace(vd.ema_ask_slow, vd.ema_ask_fast,
-                                     ema_fast_alpha);
-    }
-    // INFO_FLOG("{} fp_mid: {}, prev_mid: {}, r: {}, r2_up: {}, ema_bid_fast: "
-    //           "{}, ema_bid_slow: {}",
-    //           IC->inst_str, fp_mid, prev_mid, r, r2_up, vd.ema_bid_fast,
-    //           vd.ema_bid_slow);
-
-    // ===== 3) 取 fast 或 max(fast,slow)，再换频 scale_time，最后转回价格半宽
-    // =====
-    double scale_time = CFG_.multi_order_vol;
-    const double sig_dn_fast = std::sqrt(vd.ema_bid_fast * scale_time);
-    const double sig_dn_slow = std::sqrt(vd.ema_bid_slow * scale_time);
-    const double sig_up_fast = std::sqrt(vd.ema_ask_fast * scale_time);
-    const double sig_up_slow = std::sqrt(vd.ema_ask_slow * scale_time);
-
-    double sig_dn = (method == data::VolatilityMethod::METHOD_FP_DIFF)
-                        ? sig_dn_fast
-                        : std::max(sig_dn_fast, sig_dn_slow);
-    double sig_up = (method == data::VolatilityMethod::METHOD_FP_DIFF)
-                        ? sig_up_fast
-                        : std::max(sig_up_fast, sig_up_slow);
-    if (sig_dn < init_r)
-      sig_dn = init_r;
-    if (sig_up < init_r)
-      sig_up = init_r;
-
-    // 价格半宽（ΔP ≈ fp_mid * sigma）
-    double vol_bid_fp_tmp = fp_mid * sig_dn;
-    double vol_ask_fp_tmp = fp_mid * sig_up;
-
-    // ===== 4) envelope attack/release 平滑 =====
-    vd.vol_bid_fp = DataProcess::envelope_attack_release(
-        vd.vol_bid_fp, vol_bid_fp_tmp, 0.000769867);
-    vd.vol_ask_fp = DataProcess::envelope_attack_release(
-        vd.vol_ask_fp, vol_ask_fp_tmp, 0.000769867);
-
-    // ===== 5) slope 放大 =====
-    if (CFG_.flag_slope &&
-        static_cast<size_t>(sd.slope_cnt) > sd.fps_begin.size()) {
-      vd.vol_bid_fp *= (std::abs(sd.slope_bid) > 0.5) ? sd.factor_bid : 1.0;
-      vd.vol_ask_fp *= (std::abs(sd.slope_ask) > 0.5) ? sd.factor_ask : 1.0;
-    }
-
-    // ===== 6) cuscore =====
-    if (CFG_.flag_cuscore && sum_util::Find(constant::available_digital,
-                                            data::get_currency_name(base))) {
-      DataProcess::update_cuscore(cc, CFG_, fp_bid, fp_ask);
-    }
-
-    // ===== 7) 偏离检测 =====
-    const auto &diff_ob_bid = fp_bid - dd.bids[0][0];
-    const auto &diff_ob_ask = fp_ask - dd.asks[0][0];
-    sum_util::EMAStepInplace(vd.ema_diffOb_bid2, diff_ob_bid, ema_fast_alpha2);
-    sum_util::EMAStepInplace(vd.ema_diffOb_ask2, diff_ob_ask, ema_fast_alpha2);
-    if (vd.cnt_diff_plus == 0 && vd.cnt_diff_minus == 0) {
-      if (diff_ob_bid > 0)
-        vd.cnt_diff_plus++;
-      else
-        vd.cnt_diff_minus++;
-    } else if (vd.cnt_diff_plus != 0) {
-      if (diff_ob_bid > 0)
-        vd.cnt_diff_plus++;
-      else {
-        vd.cnt_diff_plus = 0;
-        vd.cnt_diff_minus++;
-      }
-    } else if (vd.cnt_diff_minus != 0) {
-      if (diff_ob_bid < 0)
-        vd.cnt_diff_minus++;
-      else {
-        vd.cnt_diff_minus = 0;
-        vd.cnt_diff_plus++;
-      }
-    }
-    const auto &diff2_ob_bid = sum_util::VSquare(diff_ob_bid);
-    const auto &diff2_ob_ask = sum_util::VSquare(diff_ob_ask);
-    sum_util::EMAStepInplace(vd.ema_diffOb_bid, diff2_ob_bid, ema_fast_alpha2);
-    sum_util::EMAStepInplace(vd.ema_diffOb_ask, diff2_ob_ask, ema_fast_alpha2);
-
-    // ===== 8) 更新 prev fp =====
-    vd.fp_bid = fp_bid;
-    vd.fp_ask = fp_ask;
-  }
-  return flag_ready;
-}
 
 void FairPriceGenerator::update_fp_insts() {
   // 你可以在这里放一个统一的 Params（也可以从 CFG_ 读）
