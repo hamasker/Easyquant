@@ -353,14 +353,12 @@ void TakingDemo::process_negative(int64_t ts) {
 void TakingDemo::process_fp(int64_t ts) {
   DataProcess::fetch_data_all(last_data_info, InstData_, CFG_);
   auto t0 = std::chrono::steady_clock::now();
-  if (!fpg_->update(ts))
-    return;
+  bool ok = fpg_->update(ts);
+  auto elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(
+      std::chrono::steady_clock::now() - t0).count();
   static int timing_cnt = 0;
-  if (++timing_cnt <= 10) [[unlikely]] {
-    auto us = std::chrono::duration_cast<std::chrono::microseconds>(
-        std::chrono::steady_clock::now() - t0).count();
-    INFO_FLOG("[FP timing] update() took {} us", us);
-  }
+  if (++timing_cnt <= 10) [[unlikely]]
+    INFO_FLOG("[FP timing] update()={} took {} us", ok, elapsed_us);
 }
 
 void TakingDemo::process_order(int64_t ts) {
