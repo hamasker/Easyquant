@@ -893,11 +893,11 @@ void FairPriceGenerator::calculate_fp_usdc() {
 
   // USDC 锚定检测: 利用 Circle 1:1 赎回机制做安全校验
   static constexpr double kUsdcWarnBps = 2.0;
-  static constexpr double kUsdcHardBps = 20.0;
+  static constexpr double kUsdcHardBps = 10.0;
   double mid = (fp[0] + fp[1]) * 0.5;
   double dev_bp = std::abs(mid - 1.0) * 10000.0;
   if (dev_bp > kUsdcHardBps) [[unlikely]] {
-    ERROR_FLOG("usdc depeg: mid={:.6f} dev={:.1f}bp, capping to ±20bp", mid, dev_bp);
+    ERROR_FLOG("usdc depeg: mid={:.6f} dev={:.1f}bp, capping to ±{}bp", mid, dev_bp, kUsdcHardBps);
     fp[0] = std::max(fp[0], 1.0 - kUsdcHardBps / 10000.0);
     fp[1] = std::min(fp[1], 1.0 + kUsdcHardBps / 10000.0);
   } else if (dev_bp > kUsdcWarnBps) {
