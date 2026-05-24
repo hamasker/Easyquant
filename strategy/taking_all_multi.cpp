@@ -12,35 +12,101 @@
 #include <memory>
 #include <algorithm>
 
-// ─── 动态获取 Binance Top 20 成交量 (用于 FP 触发) ───
-static std::vector<std::string> fetch_top20_binance_usdt_pairs() {
-  std::vector<std::string> result;
+// ─── 动态获取各交易所 Top 成交量 pairs (用于 FP 触发) ───
+struct VolumeSource {
+  const char *name;       // 交易所名 (日志用)
+  const char *exch_abbr;  // 交易所缩写 (组装 inst_str 用)
+  const char *url;        // 24h ticker API
+  // 解析函数: 从 JSON array element 提取 symbol + quoteVolume
+  std::function<std::pair<std::string, double>(const nlohmann::json &)> parse;
+};
+
+static const VolumeSource kVolumeSources[] = {
+  {"Binance", "bn", "curl -s --max-time 5 'https://api.binance.com/api/v3/ticker/24hr?type=MINI' 2>/dev/null",
+   [](const nlohmann::json &d) -> std::pair<std::string, double> {
+     std::string sym = d.value("symbol", "");
+     if (sym.size() < 4 || sym.substr(sym.size() - 4) != "USDT") return {"", 0};
+     return {sym, std::stod(d.value("quoteVolume", "0"))};
+   }},
+  {"OKX", "ok", "curl -s --max-time 5 'https://www.okx.com/api/v5/market/tickers?instType=SPOT' 2>/dev/null",
+   [](const nlohmann::json &d) -> std::pair<std::string, double> {
+     std::string id = d.value("instId", "");
+     if (id.size() < 5 || id.substr(id.size() - 5) != "USDT") return {"", 0};
+     std::string sym = id.substr(0, id.size() - 5) + "_" + "USDT"; // BTC-USDT → BTC_USDT
+     return {sym, std::stod(d.value("volCcy24h", "0"))};
+   }},
+  {"Gate.io", "gt", "curl -s --max-time 5 'https://api.gateio.ws/api/v4/spot/tickers' 2>/dev/null",
+   [](const nlohmann::json &d) -> std::pair<std::string, double> {
+     std::string pair = d.value("currency_pair", "");
+     if (pair.size() < 5 || pair.substr(pair.size() - 5) != "_USDT") return {"", 0};
+     return {pair, std::stod(d.value("quote_volume", "0"))};
+   }},
+};
+
+// 统一的 HTTP GET + JSON 解析
+static std::string http_get(const char *shell_cmd) {
   std::string raw;
   char buf[4096];
-  auto *pipe = popen("curl -s --max-time 5 'https://api.binance.com/api/v3/ticker/24hr' 2>/dev/null", "r");
-  if (!pipe) return result;
+  auto *pipe = popen(shell_cmd, "r");
+  if (!pipe) return raw;
   while (fgets(buf, sizeof(buf), pipe)) raw += buf;
   pclose(pipe);
-  if (raw.empty() || raw[0] != '[') return result;
+  return raw;
+}
+
+// 从单个交易所获取 Top N (symbol → 原生格式, 如 BTCUSDT / BTC_USDT)
+static std::vector<std::string> fetch_top_n(const VolumeSource &src, int n) {
+  std::vector<std::string> result;
+  std::string raw = http_get(src.url);
+  if (raw.empty()) return result;
 
   try {
     auto data = nlohmann::json::parse(raw);
+    // OKX 的格式是 {"data": [...]}
+    const auto *arr = &data;
+    if (data.is_object() && data.contains("data") && data["data"].is_array())
+      arr = &data["data"];
+    if (!arr->is_array()) return result;
+
     std::vector<std::pair<std::string, double>> ranked;
-    for (auto &d : data) {
-      std::string sym = d.value("symbol", "");
-      if (sym.size() < 4 || sym.substr(sym.size() - 4) != "USDT") continue;
-      double vol = std::stod(d.value("quoteVolume", "0"));
-      if (vol > 0) ranked.emplace_back(sym, vol);
+    for (auto &d : *arr) {
+      auto [sym, vol] = src.parse(d);
+      if (!sym.empty() && vol > 0) ranked.emplace_back(sym, vol);
     }
     std::sort(ranked.begin(), ranked.end(),
               [](auto &a, auto &b) { return a.second > b.second; });
-    for (size_t i = 0; i < std::min(ranked.size(), size_t(20)); ++i)
+    for (int i = 0; i < std::min((int)ranked.size(), n); ++i)
       result.push_back(ranked[i].first);
-    INFO_FLOG("[Top20] Fetched {} top USDT pairs from Binance", result.size());
-  } catch (...) {
-    WARNING_LOG("[Top20] Failed to parse Binance 24hr ticker");
+    INFO_FLOG("[TradeVol] {}: top {} / {} pairs", src.name, result.size(), ranked.size());
+  } catch (const std::exception &e) {
+    WARNING_FLOG("[TradeVol] {} parse failed: {}", src.name, e.what());
   }
   return result;
+}
+
+// 综合入口: 从所有可用交易所拉 Top N, 组装成 inst_str (如 btcusdt_spot.bn)
+static std::vector<std::string> fetch_all_top_pairs(int per_exch) {
+  std::vector<std::string> all;
+  for (auto &src : kVolumeSources) {
+    auto tops = fetch_top_n(src, per_exch);
+    for (auto &sym : tops) {
+      // 转小写 + 组装 inst_str: BTCUSDT → btcusdt, BTC_USDT → btc_usdt
+      std::string lower = sym;
+      std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+      // 统一用 _ 分隔
+      if (lower.find('_') == std::string::npos) {
+        // BTCUSDT → 需要拆 base/quote
+        for (const char *q : {"usdt"}) {
+          if (lower.size() > 4 && lower.substr(lower.size() - 4) == q) {
+            lower = lower.substr(0, lower.size() - 4) + "_" + q;
+            break;
+          }
+        }
+      }
+      all.push_back(lower + "_spot." + src.exch_abbr);
+    }
+  }
+  return all;
 }
 
 STRATEGY_API_IMPLEMENT(TakingDemo)
@@ -101,19 +167,16 @@ bool TakingDemo::on_init(const Config *cfg) {
     subscribe_instruments(inst_str, true);
   }
 
-  // 动态订阅 Binance Top 20 trade (仅用于成交额触发 FP)
-  auto top20 = fetch_top20_binance_usdt_pairs();
-  for (auto &sym : top20) {
-    std::string inst = sym + "_spot.bn";
-    std::transform(inst.begin(), inst.end(), inst.begin(), ::tolower);
-    // 跳过已订阅的
+  // 动态订阅各交易所 Top N trade (仅用于成交额触发 FP)
+  auto trade_pairs = fetch_all_top_pairs(20);
+  for (auto &inst : trade_pairs) {
     bool exists = false;
     for (auto &s : subs)
       if (s.position && s.position->instrument.GetSymbol() == inst) { exists = true; break; }
     if (!exists)
       subscribe_instruments(inst, true);
   }
-  INFO_FLOG("[OnInit] Subscribed {} top20 pairs for FP turnover trigger", top20.size());
+  INFO_FLOG("[OnInit] Subscribed {} dynamic top-pairs for FP turnover trigger", trade_pairs.size());
 
   /*
   ! Initialize Variables
