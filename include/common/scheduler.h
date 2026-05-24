@@ -28,6 +28,7 @@ struct ModuleScheduler {
   bool flag_data_ready = false;
   bool disconnect_flag = false;
   std::atomic<int> new_data_count_{0}; // on_datainfo 计数, on_poll 消费
+  bool flag_new_data = false;          // on_datainfo 设置, mark_fp 清除
 
   inline void init(double negative_interval_ms, double fp_turnover_usd_,
                    double order_turnover_usd_, double fp_interval_max_ms,
@@ -57,9 +58,8 @@ struct ModuleScheduler {
   }
 
   inline bool should_fp(int64_t ts) const {
-    return acc_usd_fp >= fp_turnover_usd ||         // 成交额触发
-           acc_bbo_cnt >= fp_bbo_trigger_cnt ||      // BBO 更新累积触发
-           ts - last_fp_ts > fp_interval_max_ns;     // 兜底定时触发
+    return flag_new_data ||                          // 新数据来就触发
+           ts - last_fp_ts > fp_interval_max_ns;     // 兜底 10ms
   }
   inline bool should_order(int64_t ts) const {
     return acc_usd_order >= order_turnover_usd ||
@@ -73,6 +73,7 @@ struct ModuleScheduler {
     last_fp_ts = ts;
     acc_usd_fp = 0.0;
     acc_bbo_cnt = 0;
+    flag_new_data = false;
   }
   inline void mark_order(int64_t ts) {
     last_order_ts = ts;

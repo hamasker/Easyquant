@@ -138,9 +138,8 @@ void TakingDemo::on_datainfo(const DataInfoManager *datainfo, int32_t di,
                InstData_.trade_map.size());
   const auto &one = datainfo->datainfo().at(di);
   scheduler_.new_data_count_++;
+  scheduler_.flag_new_data = true;
   auto qt = (int)one.quote_type();
-  if (qt == NOVA_COIN_QUOTE_BBO)
-    scheduler_.acc_bbo_cnt++;
   if (CFG_.Strategy.Verbose.ob)
     DEBUG_FLOG("[VerboseOb] on_datainfo di={} qtype={}", di, qt);
   scheduler_.flag_data_ready =
