@@ -139,6 +139,8 @@ void TakingDemo::on_datainfo(const DataInfoManager *datainfo, int32_t di,
   const auto &one = datainfo->datainfo().at(di);
   scheduler_.new_data_count_++;
   auto qt = (int)one.quote_type();
+  if (qt == NOVA_COIN_QUOTE_BBO)
+    scheduler_.acc_bbo_cnt++;
   if (CFG_.Strategy.Verbose.ob)
     DEBUG_FLOG("[VerboseOb] on_datainfo di={} qtype={}", di, qt);
   scheduler_.flag_data_ready =
@@ -248,9 +250,7 @@ void TakingDemo::process_order(int64_t ts) {
 
 void TakingDemo::accumulate_turnover(const data::InstrumentComponent &IC,
                                      double price, double qty) {
-  if (!DataProcess::is_main_exchange(IC.inst_str,
-                                     CFG_.Strategy.Stable.aim_exchange))
-    return;
+  // 全市场成交额驱动 FP 频率 — Binance 量大触发快, 不依赖单一交易所
   const auto &q = IC.quote_str;
   if (q != "usd" && q != "usdt" && q != "usdc")
     return;

@@ -12,6 +12,7 @@ struct ModuleScheduler {
   int64_t disconnect_retry_ns = static_cast<int64_t>(1e9);
   double fp_turnover_usd = 0.0;
   double order_turnover_usd = 0.0;
+  int fp_bbo_trigger_cnt = 50;    // BBO 累积次数触发阈值
 
   // ===== 运行时状态 =====
   int64_t last_disconnect_ts = 0;
@@ -20,6 +21,7 @@ struct ModuleScheduler {
   int64_t last_order_ts = 0;
   double acc_usd_fp = 0.0;
   double acc_usd_order = 0.0;
+  int acc_bbo_cnt = 0;            // BBO 更新累积计数
 
   // ===== 状态flag (与节拍同生命周期, 集中放这里避免散落在 strategy 类) =====
   bool flag_first = true;
@@ -55,8 +57,9 @@ struct ModuleScheduler {
   }
 
   inline bool should_fp(int64_t ts) const {
-    return acc_usd_fp >= fp_turnover_usd ||
-           ts - last_fp_ts > fp_interval_max_ns;
+    return acc_usd_fp >= fp_turnover_usd ||         // 成交额触发
+           acc_bbo_cnt >= fp_bbo_trigger_cnt ||      // BBO 更新累积触发
+           ts - last_fp_ts > fp_interval_max_ns;     // 兜底定时触发
   }
   inline bool should_order(int64_t ts) const {
     return acc_usd_order >= order_turnover_usd ||
@@ -69,6 +72,7 @@ struct ModuleScheduler {
   inline void mark_fp(int64_t ts) {
     last_fp_ts = ts;
     acc_usd_fp = 0.0;
+    acc_bbo_cnt = 0;
   }
   inline void mark_order(int64_t ts) {
     last_order_ts = ts;
