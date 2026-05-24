@@ -7,6 +7,41 @@
 #define RYML_SINGLE_HDR_DEFINE_NOW
 #include "taking_all_multi.h"
 #include "trade/trade_server.h"
+#include "nlohmann_json/json.hpp"
+#include <cstdio>
+#include <memory>
+#include <algorithm>
+
+// ─── 动态获取 Binance Top 20 成交量 (用于 FP 触发) ───
+static std::vector<std::string> fetch_top20_binance_usdt_pairs() {
+  std::vector<std::string> result;
+  std::string raw;
+  char buf[4096];
+  auto *pipe = popen("curl -s --max-time 5 'https://api.binance.com/api/v3/ticker/24hr' 2>/dev/null", "r");
+  if (!pipe) return result;
+  while (fgets(buf, sizeof(buf), pipe)) raw += buf;
+  pclose(pipe);
+  if (raw.empty() || raw[0] != '[') return result;
+
+  try {
+    auto data = nlohmann::json::parse(raw);
+    std::vector<std::pair<std::string, double>> ranked;
+    for (auto &d : data) {
+      std::string sym = d.value("symbol", "");
+      if (sym.size() < 4 || sym.substr(sym.size() - 4) != "USDT") continue;
+      double vol = std::stod(d.value("quoteVolume", "0"));
+      if (vol > 0) ranked.emplace_back(sym, vol);
+    }
+    std::sort(ranked.begin(), ranked.end(),
+              [](auto &a, auto &b) { return a.second > b.second; });
+    for (size_t i = 0; i < std::min(ranked.size(), size_t(20)); ++i)
+      result.push_back(ranked[i].first);
+    INFO_FLOG("[Top20] Fetched {} top USDT pairs from Binance", result.size());
+  } catch (...) {
+    WARNING_LOG("[Top20] Failed to parse Binance 24hr ticker");
+  }
+  return result;
+}
 
 STRATEGY_API_IMPLEMENT(TakingDemo)
 
@@ -65,6 +100,21 @@ bool TakingDemo::on_init(const Config *cfg) {
   for (const auto &inst_str : CFG_.Strategy.Stable.instruments) {
     subscribe_instruments(inst_str, true);
   }
+
+  // 动态订阅 Binance Top 20 trade (仅用于成交额触发 FP)
+  auto top20 = fetch_top20_binance_usdt_pairs();
+  for (auto &sym : top20) {
+    std::string inst = sym + "_spot.bn";
+    std::transform(inst.begin(), inst.end(), inst.begin(), ::tolower);
+    // 跳过已订阅的
+    bool exists = false;
+    for (auto &s : subs)
+      if (s.position && s.position->instrument.GetSymbol() == inst) { exists = true; break; }
+    if (!exists)
+      subscribe_instruments(inst, true);
+  }
+  INFO_FLOG("[OnInit] Subscribed {} top20 pairs for FP turnover trigger", top20.size());
+
   /*
   ! Initialize Variables
   */

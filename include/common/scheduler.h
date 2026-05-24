@@ -57,9 +57,8 @@ struct ModuleScheduler {
     return ts - last_negative_ts > negative_interval_ns;
   }
 
-  inline bool should_fp(int64_t ts) const {
-    return flag_new_data ||                          // 新数据来就触发
-           ts - last_fp_ts > fp_interval_max_ns;     // 兜底 10ms
+  inline bool should_fp(int64_t) const {
+    return acc_usd_fp >= fp_turnover_usd;            // 成交额触发, 无线程定时
   }
   inline bool should_order(int64_t ts) const {
     return acc_usd_order >= order_turnover_usd ||
