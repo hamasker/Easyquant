@@ -8,6 +8,7 @@ struct ModuleScheduler {
   // ===== 静态阈值 (init 时一次拷入, 单位 ns) =====
   int64_t negative_interval_ns = 0;
   int64_t fp_interval_max_ns = 0;
+  int64_t fp_interval_min_ns = static_cast<int64_t>(20e6); // 最小间隔 20ms
   int64_t order_interval_max_ns = 0;
   int64_t disconnect_retry_ns = static_cast<int64_t>(1e9);
   double fp_turnover_usd = 0.0;
@@ -57,8 +58,9 @@ struct ModuleScheduler {
     return ts - last_negative_ts > negative_interval_ns;
   }
 
-  inline bool should_fp(int64_t) const {
-    return acc_usd_fp >= fp_turnover_usd;            // 成交额触发, 无线程定时
+  inline bool should_fp(int64_t ts) const {
+    return acc_usd_fp >= fp_turnover_usd &&
+           ts - last_fp_ts > fp_interval_min_ns;      // 成交额 + 最小间隔
   }
   inline bool should_order(int64_t ts) const {
     return acc_usd_order >= order_turnover_usd ||
