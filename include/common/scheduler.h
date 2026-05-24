@@ -8,7 +8,7 @@ struct ModuleScheduler {
   // ===== 静态阈值 (init 时一次拷入, 单位 ns) =====
   int64_t negative_interval_ns = 0;
   int64_t fp_interval_max_ns = 0;
-  int64_t fp_interval_min_ns = static_cast<int64_t>(20e6); // 最小间隔 20ms
+  int64_t fp_interval_min_ns = static_cast<int64_t>(500e3); // 最小间隔 500μs
   int64_t order_interval_max_ns = 0;
   int64_t disconnect_retry_ns = static_cast<int64_t>(1e9);
   double fp_turnover_usd = 0.0;
