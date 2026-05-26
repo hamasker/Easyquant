@@ -133,7 +133,7 @@
         "Verbose": {
             "order": false,
             "fp": false,
-            "ob": false,
+            "ob": true,
             "cuscore": false,
             "tfi": false
         },

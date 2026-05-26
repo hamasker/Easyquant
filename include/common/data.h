@@ -1788,6 +1788,8 @@ struct InstrumentData {
   std::unordered_map<UniInstID, OrderManager> swap_order_map;
   std::unordered_map<UniInstID, trades_data> trade_map;
   std::vector<UniInstID> trading_ids;
+  std::vector<UniInstID> turnover_ids;
+  std::unordered_map<UniInstID, bool> turnover_map;
   std::unordered_map<data::currency, double> cost_map;
   std::unordered_map<uint16_t, delay_data>
       delay_map; // key = (exchange << 8) | inst_type

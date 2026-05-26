@@ -4,6 +4,7 @@
  *
  * Created by Yurong Chen (gghamasker@gmail.com) on 2025-12-22.
  *****************************************************************************/
+#include "container_util.h"
 #define RYML_SINGLE_HDR_DEFINE_NOW
 #include "common/volume_pairs.h"
 #include "taking_all_multi.h"
@@ -67,21 +68,27 @@ bool TakingDemo::on_init(const Config *cfg) {
     subscribe_instruments(inst_str, true);
   }
 
-  // 动态订阅 Top N trade (仅用于成交额触发 FP, 只订 trade 频道)
-  for (auto &pair : turnover_pairs_.filter_new(fetch_all_top_pairs(20))) {
+  // ── turnover 订阅: 先收策略标的, 再补 top-N 缺口 ──
+  // 1. 策略已订阅的 spot (含 trade 频道)
+  for (auto &item : InstData_.trade_map) {
+    auto symbol = InstData_.IM.FindByUniId(item.first)->inst_str;
+    turnover_pairs_.insert(symbol);
+  }
+
+  // 2. top-N 中未订阅的补上 (只订 trade)
+  for (auto &pair : fetch_all_top_pairs(20)) {
     auto inst_id = InstrumentId::Create(pair);
-    if (!inst_id.Valid()) continue;
+    if (!inst_id.Valid())
+      continue;
     auto *base_info = GetBaseInfo(inst_id);
     auto IC_tmp = data::InstrumentComponent{inst_id, base_info, ""};
-    if (InstData_.IM.FindByInstStr(IC_tmp.inst_str)) continue; // 已存在
     InstData_.IM.Insert(IC_tmp);
-    auto *IC = InstData_.IM.FindByUniId(IC_tmp.uni_id);
     auto *posi = CreateSecurityPosition(inst_id);
-    ChangePositionToSingleSide(posi);
-    InstData_.trade_map[IC->uni_id] = data::trades_data{};
     subs.emplace_back(SubTopic{posi, NOVA_COIN_QUOTE_TRADE, true});
+    turnover_pairs_.insert(pair);
   }
   INFO_FLOG("[OnInit] turnover subs: {}", turnover_pairs_.size());
+  INFO_FLOG("[OnInit] turnover subs: {}", sum_util::ToString(turnover_pairs_));
   /*
   ! Initialize Variables
   */
@@ -166,21 +173,21 @@ void TakingDemo::on_datainfo(const DataInfoManager *datainfo, int32_t di,
   /*
   ! 读取检查数据
   */
-  if (CFG_.Strategy.Verbose.ob && scheduler_.flag_first)
+  if (scheduler_.flag_first)
     DEBUG_FLOG("[VerboseOb] before fetch data, depth_map: {} bbo_map: {} "
-               "trade_map: {}",
+               "trade_map: {}, turnover_pairs: {}",
                InstData_.depth_map.size(), InstData_.bbo_map.size(),
-               InstData_.trade_map.size());
+               InstData_.trade_map.size(), turnover_pairs_.size());
   const auto &one = datainfo->datainfo().at(di);
   scheduler_.new_data_count_++;
   scheduler_.flag_new_data = true;
-  auto qt = (int)one.quote_type();
-  if (CFG_.Strategy.Verbose.ob)
-    DEBUG_FLOG("[VerboseOb] on_datainfo di={} qtype={}", di, qt);
+  auto quote_type = one.quote_type();
+  // if (CFG_.Strategy.Verbose.ob)
+  //   DEBUG_FLOG("[VerboseOb] on_datainfo di={} qtype={}", di, quote_type);
+  // if (quote_type == NOVA_COIN_QUOTE_TRADE && ) {
   scheduler_.flag_data_ready =
       DataProcess::fetch_data(one, InstData_, scheduler_.flag_data_ready, CFG_);
   // 更新 global_ts
-  auto quote_type = one.quote_type();
   if (quote_type == NOVA_COIN_QUOTE_BBO) {
     const auto &data = *static_cast<const BBO *>(one.buffer().back());
     global_ts = data.local_time;
@@ -188,7 +195,6 @@ void TakingDemo::on_datainfo(const DataInfoManager *datainfo, int32_t di,
     const auto &data = *static_cast<const Bar *>(one.buffer().back());
     global_ts = data.local_time;
   } else if (quote_type == NOVA_COIN_QUOTE_DEPTH) {
-
     const auto &data = *static_cast<const Depth *>(one.buffer().back());
     global_ts = data.local_time;
   } else if (quote_type == NOVA_COIN_QUOTE_DEPTH_LVN) {
@@ -198,13 +204,12 @@ void TakingDemo::on_datainfo(const DataInfoManager *datainfo, int32_t di,
   } else if (quote_type == NOVA_COIN_QUOTE_TRADE) {
     const auto *trade = static_cast<const Trade *>(one.buffer().back());
     global_ts = trade->local_time;
-    // turnover 累加
-    auto it = InstData_.IM.inststr2id_.find(trade->instrument_id.symbol);
-    if (it != InstData_.IM.inststr2id_.end()) {
-      auto *IC = InstData_.IM.FindByUniId(it->second);
-      if (IC)
-        accumulate_turnover(*IC, trade->price, trade->qty);
-    }
+    // turnover 累加 (O(1) 集合判断)
+    INFO_FLOG("trade_symbol: {}, price: {}, qty: {}",
+              trade->instrument_id.symbol, trade->price, trade->qty);
+    if (turnover_pairs_.find(trade->instrument_id.symbol) !=
+        turnover_pairs_.end())
+      scheduler_.add_turnover(trade->price * trade->qty);
   }
   if (scheduler_.flag_first) {
     INFO_FLOG("[OnStrategy]trigger on_datainfo success {}",

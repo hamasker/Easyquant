@@ -3,7 +3,6 @@
 #include "common/data.h"
 #include "common/drift_table.h"
 #include "common/scheduler.h"
-#include "common/turnover_pairs.h"
 #include "config_reloader.h"
 #include "configs/configs.h"
 #include "data_process.h"
@@ -90,7 +89,7 @@ private:
 
   // OB 档位 drift 表 (按 base 币种索引, 如 "btc" → DriftTable)
   std::unordered_map<std::string, DriftTable> drift_tables_;
-  // turnover 订阅管理 (去重, 只订 trade)
+  // turnover 订阅管理 (去重, O(1) 判断)
   TurnoverPairManager turnover_pairs_;
 
   int64_t global_ts = 0;

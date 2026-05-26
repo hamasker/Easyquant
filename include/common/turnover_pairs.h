@@ -1,24 +1,29 @@
 #pragma once
-// turnover 订阅管理 — 只订 trade 频道, 去重, 与做市订阅隔离
+// turnover 订阅管理 — O(1) 判断, 只订 trade 频道
 
+#include <cstdint>
 #include <string>
 #include <unordered_set>
 #include <vector>
 
 struct TurnoverPairManager {
-  std::unordered_set<std::string> subscribed; // 已订阅的 inst_str
+  using UniInstID = uint16_t;
 
-  // 返回新增的 pair (未订阅过的)
+  std::unordered_set<std::string> subscribed_str;
+  std::unordered_set<UniInstID> ids;
+
   std::vector<std::string> filter_new(const std::vector<std::string> &pairs) {
     std::vector<std::string> out;
     for (auto &p : pairs) {
-      if (subscribed.find(p) == subscribed.end()) {
+      if (subscribed_str.find(p) == subscribed_str.end()) {
         out.push_back(p);
-        subscribed.insert(p);
+        subscribed_str.insert(p);
       }
     }
     return out;
   }
 
-  size_t size() const { return subscribed.size(); }
+  void add_id(UniInstID id) { ids.insert(id); }
+  bool contains(UniInstID id) const { return ids.find(id) != ids.end(); }
+  size_t size() const { return ids.size(); }
 };
