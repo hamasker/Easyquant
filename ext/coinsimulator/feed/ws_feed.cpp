@@ -151,14 +151,9 @@ public:
     } else if (exchange_ == "coinbase" || exchange_ == "cb") {
       // Advanced Trade WS: channel (singular) + product_ids
       for (auto &ch : feed_.channels()) {
-        auto syms = feed_.symbols();
-        fprintf(stderr, "[CB_SUB] ch=%s product_ids=[", ch.c_str());
-        for (size_t i = 0; i < syms.size() && i < 5; ++i)
-          fprintf(stderr, "%s%s", (i?", ":""), syms[i].c_str());
-        fprintf(stderr, "] total=%zu\n", syms.size());
         nlohmann::json sub{{"type", "subscribe"},
                            {"channel", ch},
-                           {"product_ids", syms}};
+                           {"product_ids", feed_.symbols()}};
         api_->Send(sub.dump());
       }
       INFO_FLOG("[WSFeed] Subscribed to {} coinbase channels", feed_.channels().size());
@@ -287,7 +282,7 @@ MapChannels(const std::string &exchange,
     } else if (exchange == "coinbase" || exchange == "cb") {
       if (ch == "bbo") out.push_back("level2");
       else if (ch == "depth") out.push_back("level2");
-      else if (ch == "trade") out.push_back("market_trades");
+      else if (ch == "trade") out.push_back("ticker");
       else out.push_back(ch);
     } else if (exchange == "gateio" || exchange == "gt") {
       // 新 JSON-RPC: bbo → depth(limit=1), trade → trades
@@ -445,11 +440,6 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
   if ((exchange == "cb" || exchange == "coinbase") &&
       (data.value("type", "") == "subscriptions" ||
        data.value("channel", "") == "subscriptions")) {
-    static int cb_sub_dbg = 0;
-    if (++cb_sub_dbg <= 5) {
-      std::string raw = data.dump();
-      fprintf(stderr, "[CB_SUB_RESP] %s\n", raw.c_str());
-    }
     return;
   }
 
@@ -518,18 +508,6 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
     (void)size;
   };
 
-  // DEBUG: 打印 Kraken 消息类型
-  if (exchange == "krk" || exchange == "kraken") {
-    static int krk_dbg = 0;
-    if (++krk_dbg <= 30) {
-      if (data.is_array())
-        fprintf(stderr, "[KRK_ARR#%d] size=%zu ch=%s\n", krk_dbg, data.size(),
-                (data.size()>=3&&data[2].is_string())?data[2].get<std::string>().c_str():"?");
-      else
-        fprintf(stderr, "[KRK_OBJ#%d] has_event=%d\n", krk_dbg,
-                data.is_object()&&data.contains("event")?1:0);
-    }
-  }
   // Kraken trade: [channelID, [[price,vol,time,side,...],...], "trade", pair]
   if ((exchange == "krk" || exchange == "kraken") && data.is_array() &&
       data.size() >= 4 && data[2].is_string()) {
@@ -564,14 +542,34 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
     return;
   }
 
-  // DEBUG: dump Coinbase channel names
-  if ((exchange == "cb" || exchange == "coinbase") && data.is_object()) {
-    static int cb_cnt = 0;
-    if (++cb_cnt <= 20)
-      fprintf(stderr, "[CB_CH] channel=%s\n", data.value("channel", "?").c_str());
+  // Coinbase ticker: {"channel":"ticker","events":[{"tickers":[...]}]}
+  if ((exchange == "cb" || exchange == "coinbase") &&
+      data.value("channel", "") == "ticker" &&
+      data.contains("events") && data["events"].is_array()) {
+    for (auto &evt : data["events"]) {
+      if (!evt.contains("tickers") || !evt["tickers"].is_array()) continue;
+      for (auto &t : evt["tickers"]) {
+        std::string pair = t.value("product_id", "");
+        if (pair.empty()) continue;
+        auto it = symbol_to_inst_.find(pair);
+        if (it == symbol_to_inst_.end()) continue;
+        // ticker 没有 side/qty, 用 price 和 best_bid/best_ask 估算 qty
+        double price = std::stod(t.value("price", "0"));
+        if (price <= 0) continue;
+        NovaCoinTrade trade{};
+        trade.instrument_id = it->second;
+        trade.price = price;
+        trade.qty = 1.0;  // ticker 无精确 qty, 用 1 做占位
+        trade.side = NOVA_SIDE_BUY;  // ticker 无 side 信息
+        trade.local_time = local_ns;
+        trade.local_ns = local_ns;
+        dispatch(NOVA_COIN_QUOTE_TRADE, &trade, sizeof(trade));
+      }
+    }
+    return;
   }
 
-  // Coinbase market_trades: {"channel":"market_trades","events":[{"trades":[...]}]}
+  // Coinbase market_trades (fallback): {"channel":"market_trades","events":[{"trades":[...]}]}
   if ((exchange == "cb" || exchange == "coinbase") &&
       data.value("channel", "") == "market_trades" &&
       data.contains("events") && data["events"].is_array()) {
