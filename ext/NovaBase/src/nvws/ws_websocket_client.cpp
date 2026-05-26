@@ -564,7 +564,9 @@ private:
       }
     }
 
-    // 读取payload
+    // 防护: 帧头损坏时 payload_len 可能是垃圾值
+    if (payload_len > 64ULL * 1024 * 1024)
+      return true;
     std::vector<char> payload(payload_len);
     if (payload_len > 0) {
       size_t total_read = 0;

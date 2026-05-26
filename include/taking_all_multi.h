@@ -3,6 +3,7 @@
 #include "common/data.h"
 #include "common/drift_table.h"
 #include "common/scheduler.h"
+#include "common/turnover_pairs.h"
 #include "config_reloader.h"
 #include "configs/configs.h"
 #include "data_process.h"

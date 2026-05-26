@@ -70,25 +70,23 @@ bool TakingDemo::on_init(const Config *cfg) {
 
   // ── turnover 订阅: 先收策略标的, 再补 top-N 缺口 ──
   // 1. 策略已订阅的 spot (含 trade 频道)
-  for (auto &item : InstData_.trade_map) {
-    auto symbol = InstData_.IM.FindByUniId(item.first)->inst_str;
-    turnover_pairs_.insert(symbol);
-  }
+  for (auto &item : InstData_.trade_map)
+    turnover_pairs_.add_id(item.first);
 
   // 2. top-N 中未订阅的补上 (只订 trade)
-  for (auto &pair : fetch_all_top_pairs(20)) {
+  for (auto &pair : turnover_pairs_.filter_new(fetch_all_top_pairs(20))) {
     auto inst_id = InstrumentId::Create(pair);
-    if (!inst_id.Valid())
-      continue;
+    if (!inst_id.Valid()) continue;
     auto *base_info = GetBaseInfo(inst_id);
     auto IC_tmp = data::InstrumentComponent{inst_id, base_info, ""};
     InstData_.IM.Insert(IC_tmp);
     auto *posi = CreateSecurityPosition(inst_id);
+    ChangePositionToSingleSide(posi);
+    InstData_.trade_map[IC_tmp.uni_id] = data::trades_data{};
     subs.emplace_back(SubTopic{posi, NOVA_COIN_QUOTE_TRADE, true});
-    turnover_pairs_.insert(pair);
+    turnover_pairs_.add_id(IC_tmp.uni_id);
   }
   INFO_FLOG("[OnInit] turnover subs: {}", turnover_pairs_.size());
-  INFO_FLOG("[OnInit] turnover subs: {}", sum_util::ToString(turnover_pairs_));
   /*
   ! Initialize Variables
   */
@@ -205,10 +203,9 @@ void TakingDemo::on_datainfo(const DataInfoManager *datainfo, int32_t di,
     const auto *trade = static_cast<const Trade *>(one.buffer().back());
     global_ts = trade->local_time;
     // turnover 累加 (O(1) 集合判断)
-    INFO_FLOG("trade_symbol: {}, price: {}, qty: {}",
-              trade->instrument_id.symbol, trade->price, trade->qty);
-    if (turnover_pairs_.find(trade->instrument_id.symbol) !=
-        turnover_pairs_.end())
+    auto t_it = InstData_.IM.inststr2id_.find(trade->instrument_id.symbol);
+    if (t_it != InstData_.IM.inststr2id_.end() &&
+        turnover_pairs_.contains(t_it->second))
       scheduler_.add_turnover(trade->price * trade->qty);
   }
   if (scheduler_.flag_first) {
