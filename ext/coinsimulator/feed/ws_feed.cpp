@@ -508,6 +508,53 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
     (void)size;
   };
 
+  // Kraken trade: [channelID, [[price,vol,time,side,...],...], "trade", pair]
+  if ((exchange == "krk" || exchange == "kraken") && data.is_array() &&
+      data.size() >= 4 && data[2].is_string() &&
+      data[2].get<std::string>() == "trade") {
+    std::string pair = data[3].get<std::string>();
+    auto it = symbol_to_inst_.find(pair);
+    if (it != symbol_to_inst_.end()) {
+      InstrumentId iid = it->second;
+      for (auto &t : data[1]) {
+        if (!t.is_array() || t.size() < 5) continue;
+        NovaCoinTrade trade{};
+        trade.instrument_id = iid;
+        trade.price = std::stod(t[0].get<std::string>());
+        trade.qty = std::stod(t[1].get<std::string>());
+        trade.side = (t[3].get<std::string>() == "b") ? NOVA_SIDE_BUY : NOVA_SIDE_SELL;
+        trade.local_time = static_cast<int64_t>(std::stod(t[2].get<std::string>()) * 1e9);
+        trade.local_ns = local_ns;
+        dispatch(NOVA_COIN_QUOTE_TRADE, &trade, sizeof(trade));
+      }
+    }
+    return;
+  }
+
+  // Coinbase market_trades: {"channel":"market_trades","events":[{"trades":[...]}]}
+  if ((exchange == "cb" || exchange == "coinbase") &&
+      data.value("channel", "") == "market_trades" &&
+      data.contains("events") && data["events"].is_array()) {
+    for (auto &evt : data["events"]) {
+      if (!evt.contains("trades") || !evt["trades"].is_array()) continue;
+      for (auto &t : evt["trades"]) {
+        std::string pair = t.value("product_id", "");
+        if (pair.empty()) continue;
+        auto it = symbol_to_inst_.find(pair);
+        if (it == symbol_to_inst_.end()) continue;
+        NovaCoinTrade trade{};
+        trade.instrument_id = it->second;
+        trade.price = std::stod(t.value("price", "0"));
+        trade.qty = std::stod(t.value("size", "0"));
+        trade.side = (t.value("side", "") == "BUY") ? NOVA_SIDE_BUY : NOVA_SIDE_SELL;
+        trade.local_time = local_ns;
+        trade.local_ns = local_ns;
+        dispatch(NOVA_COIN_QUOTE_TRADE, &trade, sizeof(trade));
+      }
+    }
+    return;
+  }
+
   // Binance 单 symbol 格式: {"e":"trade"/"depthUpdate", "s":"BTCUSDT", ...}
   // Binance 组合流: {"stream":"btcusdt@bookTicker", "data":{...}}
   auto *payload = &data;
