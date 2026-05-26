@@ -508,15 +508,21 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
     (void)size;
   };
 
+  // DEBUG: 打印 Kraken 消息类型
+  if (exchange == "krk" || exchange == "kraken") {
+    static int krk_dbg = 0;
+    if (++krk_dbg <= 30) {
+      if (data.is_array())
+        fprintf(stderr, "[KRK_ARR#%d] size=%zu ch=%s\n", krk_dbg, data.size(),
+                (data.size()>=3&&data[2].is_string())?data[2].get<std::string>().c_str():"?");
+      else
+        fprintf(stderr, "[KRK_OBJ#%d] has_event=%d\n", krk_dbg,
+                data.is_object()&&data.contains("event")?1:0);
+    }
+  }
   // Kraken trade: [channelID, [[price,vol,time,side,...],...], "trade", pair]
   if ((exchange == "krk" || exchange == "kraken") && data.is_array() &&
       data.size() >= 4 && data[2].is_string()) {
-    // DEBUG: 打印所有 Kraken array 消息的 channel 名和 pair
-    static int krk_arr_cnt = 0;
-    if (++krk_arr_cnt <= 20)
-      fprintf(stderr, "[KRK_ARR] ch=%s pair=%s size=%zu\n",
-              data[2].get<std::string>().c_str(),
-              data[3].get<std::string>().c_str(), data.size());
     if (data[2].get<std::string>() == "trade") {
       std::string pair = data[3].get<std::string>();
       // Kraken pair 格式: "XBT/USD" → 需要转换大小写找 symbol_to_inst_
