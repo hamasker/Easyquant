@@ -509,6 +509,13 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
   };
 
   // Kraken trade: [channelID, [[price,vol,time,side,...],...], "trade", pair]
+  if ((exchange == "krk" || exchange == "kraken")) {
+    static int krk_all = 0;
+    if (++krk_all <= 10)
+      fprintf(stderr, "[KRK_DBG] is_arr=%d size=%zu ch_ok=%d\n",
+              data.is_array()?1:0, data.is_array()?data.size():0,
+              (data.is_array()&&data.size()>=4&&data[2].is_string())?1:0);
+  }
   if ((exchange == "krk" || exchange == "kraken") && data.is_array() &&
       data.size() >= 4 && data[2].is_string()) {
     if (data[2].get<std::string>() == "trade" && data[1].is_array()) {
