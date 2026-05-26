@@ -510,22 +510,33 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
 
   // Kraken trade: [channelID, [[price,vol,time,side,...],...], "trade", pair]
   if ((exchange == "krk" || exchange == "kraken") && data.is_array() &&
-      data.size() >= 4 && data[2].is_string() &&
-      data[2].get<std::string>() == "trade") {
-    std::string pair = data[3].get<std::string>();
-    auto it = symbol_to_inst_.find(pair);
-    if (it != symbol_to_inst_.end()) {
-      InstrumentId iid = it->second;
-      for (auto &t : data[1]) {
-        if (!t.is_array() || t.size() < 5) continue;
-        NovaCoinTrade trade{};
-        trade.instrument_id = iid;
-        trade.price = std::stod(t[0].get<std::string>());
-        trade.qty = std::stod(t[1].get<std::string>());
-        trade.side = (t[3].get<std::string>() == "b") ? NOVA_SIDE_BUY : NOVA_SIDE_SELL;
-        trade.local_time = static_cast<int64_t>(std::stod(t[2].get<std::string>()) * 1e9);
-        trade.local_ns = local_ns;
-        dispatch(NOVA_COIN_QUOTE_TRADE, &trade, sizeof(trade));
+      data.size() >= 4 && data[2].is_string()) {
+    if (data[2].get<std::string>() == "trade") {
+      std::string pair = data[3].get<std::string>();
+      // Kraken pair 格式: "XBT/USD" → 需要转换大小写找 symbol_to_inst_
+      auto it = symbol_to_inst_.find(pair);
+      if (it == symbol_to_inst_.end()) {
+        // 尝试小写匹配
+        std::string lower = pair;
+        std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+        for (auto &[k, v] : symbol_to_inst_) {
+          std::string kl = k;
+          std::transform(kl.begin(), kl.end(), kl.begin(), ::tolower);
+          if (kl == lower) { it = symbol_to_inst_.find(k); break; }
+        }
+      }
+      if (it != symbol_to_inst_.end() && data[1].is_array()) {
+        for (auto &t : data[1]) {
+          if (!t.is_array() || t.size() < 5) continue;
+          NovaCoinTrade trade{};
+          trade.instrument_id = it->second;
+          trade.price = std::stod(t[0].get<std::string>());
+          trade.qty = std::stod(t[1].get<std::string>());
+          trade.side = (t[3].get<std::string>() == "b") ? NOVA_SIDE_BUY : NOVA_SIDE_SELL;
+          trade.local_time = static_cast<int64_t>(std::stod(t[2].get<std::string>()) * 1e9);
+          trade.local_ns = local_ns;
+          dispatch(NOVA_COIN_QUOTE_TRADE, &trade, sizeof(trade));
+        }
       }
     }
     return;
