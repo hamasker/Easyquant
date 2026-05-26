@@ -63,21 +63,31 @@ if(EXISTS ${PROJECT_SOURCE_DIR}/strategy)
     add_subdirectory(${PROJECT_SOURCE_DIR}/strategy)
 endif()
 
-# 添加 coinsimulator (coinrunner 可执行程序)
-if(EXISTS ${PROJECT_SOURCE_DIR}/ext/coinsimulator)
-    add_subdirectory(${PROJECT_SOURCE_DIR}/ext/coinsimulator)
-endif()
-
 # ========== Mexc Protobuf ==========
-find_package(Protobuf REQUIRED)
+# 优先查找 conda env 中的 protobuf (无 sudo 环境)
+if(DEFINED ENV{CONDA_PREFIX})
+  list(PREPEND CMAKE_PREFIX_PATH "$ENV{CONDA_PREFIX}")
+endif()
+find_package(absl CONFIG REQUIRED)
+find_package(Protobuf CONFIG REQUIRED)
+# coinsimulator 使用 ${PROTOBUF_INCLUDE_DIRS} 变量, CONFIG 模式下需手动设置
+if(NOT PROTOBUF_INCLUDE_DIRS)
+  get_target_property(PROTOBUF_INCLUDE_DIRS protobuf::libprotobuf INTERFACE_INCLUDE_DIRECTORIES)
+endif()
 file(GLOB MEXC_PROTO_SRCS "${PROJECT_SOURCE_DIR}/ext/mexc_proto/*.pb.cc")
 add_library(mexc_proto STATIC ${MEXC_PROTO_SRCS})
 target_include_directories(mexc_proto PUBLIC
     ${PROTOBUF_INCLUDE_DIRS}
     ${PROJECT_SOURCE_DIR}/ext/mexc_proto)
-target_link_libraries(mexc_proto PUBLIC ${PROTOBUF_LIBRARIES})
+target_link_libraries(mexc_proto PUBLIC protobuf::libprotobuf)
 target_compile_options(mexc_proto PRIVATE -Wno-unused-parameter -fPIC)
 target_compile_features(mexc_proto PRIVATE cxx_std_20)
+
+# 添加 coinsimulator (coinrunner 可执行程序)
+# 必须在 mexc_proto 之后, 因为 framework 依赖 mexc_proto 库和 PROTOBUF_INCLUDE_DIRS
+if(EXISTS ${PROJECT_SOURCE_DIR}/ext/coinsimulator)
+    add_subdirectory(${PROJECT_SOURCE_DIR}/ext/coinsimulator)
+endif()
 
 # IF(EXISTS ${PROJECT_SOURCE_DIR}/Relaxquant_Release)
 # FILE(COPY ${PROJECT_SOURCE_DIR}/include DESTINATION ${PROJECT_SOURCE_DIR}/Relaxquant_Release)

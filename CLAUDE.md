@@ -44,6 +44,10 @@ cd /home/baser/Working/MX/Easyquant && ./compile.sh
 - `docs/config.md` — 配置字段全量参考
 - `docs/data-engine.md` — WSFeed/MmapFeed/数据处理
 - `docs/trading-engine.md` — 撮合引擎 + REST 实盘
+- `docs/fp-design.md` — USDT Fair Price 设计和触发机制
+- `docs/fp/README.md` — FP 模块总览, 层级结构, 快速定位
+- `docs/fp/current-state.md` — FP 当前实现详情, 各层逐解析
+- `docs/fp/forex-fp-design.md` — Forex FP 盈利分析, 问题诊断, 改进方案
 - `docs/known-issues.md` — 已知问题和约定
 
 ## 策略现状

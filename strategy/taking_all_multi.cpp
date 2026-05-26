@@ -5,109 +5,9 @@
  * Created by Yurong Chen (gghamasker@gmail.com) on 2025-12-22.
  *****************************************************************************/
 #define RYML_SINGLE_HDR_DEFINE_NOW
+#include "common/volume_pairs.h"
 #include "taking_all_multi.h"
 #include "trade/trade_server.h"
-#include "nlohmann_json/json.hpp"
-#include <cstdio>
-#include <memory>
-#include <algorithm>
-
-// ─── 动态获取各交易所 Top 成交量 pairs (用于 FP 触发) ───
-struct VolumeSource {
-  const char *name;       // 交易所名 (日志用)
-  const char *exch_abbr;  // 交易所缩写 (组装 inst_str 用)
-  const char *url;        // 24h ticker API
-  // 解析函数: 从 JSON array element 提取 symbol + quoteVolume
-  std::function<std::pair<std::string, double>(const nlohmann::json &)> parse;
-};
-
-static const VolumeSource kVolumeSources[] = {
-  {"Binance", "bn", "curl -s --max-time 5 'https://api.binance.com/api/v3/ticker/24hr?type=MINI' 2>/dev/null",
-   [](const nlohmann::json &d) -> std::pair<std::string, double> {
-     std::string sym = d.value("symbol", "");
-     if (sym.size() < 4 || sym.substr(sym.size() - 4) != "USDT") return {"", 0};
-     return {sym, std::stod(d.value("quoteVolume", "0"))};
-   }},
-  {"OKX", "ok", "curl -s --max-time 5 'https://www.okx.com/api/v5/market/tickers?instType=SPOT' 2>/dev/null",
-   [](const nlohmann::json &d) -> std::pair<std::string, double> {
-     std::string id = d.value("instId", "");
-     if (id.size() < 5 || id.substr(id.size() - 5) != "USDT") return {"", 0};
-     std::string sym = id.substr(0, id.size() - 5) + "_" + "USDT"; // BTC-USDT → BTC_USDT
-     return {sym, std::stod(d.value("volCcy24h", "0"))};
-   }},
-  {"Gate.io", "gt", "curl -s --max-time 5 'https://api.gateio.ws/api/v4/spot/tickers' 2>/dev/null",
-   [](const nlohmann::json &d) -> std::pair<std::string, double> {
-     std::string pair = d.value("currency_pair", "");
-     if (pair.size() < 5 || pair.substr(pair.size() - 5) != "_USDT") return {"", 0};
-     return {pair, std::stod(d.value("quote_volume", "0"))};
-   }},
-};
-
-// 统一的 HTTP GET + JSON 解析
-static std::string http_get(const char *shell_cmd) {
-  std::string raw;
-  char buf[4096];
-  auto *pipe = popen(shell_cmd, "r");
-  if (!pipe) return raw;
-  while (fgets(buf, sizeof(buf), pipe)) raw += buf;
-  pclose(pipe);
-  return raw;
-}
-
-// 从单个交易所获取 Top N (symbol → 原生格式, 如 BTCUSDT / BTC_USDT)
-static std::vector<std::string> fetch_top_n(const VolumeSource &src, int n) {
-  std::vector<std::string> result;
-  std::string raw = http_get(src.url);
-  if (raw.empty()) return result;
-
-  try {
-    auto data = nlohmann::json::parse(raw);
-    // OKX 的格式是 {"data": [...]}
-    const auto *arr = &data;
-    if (data.is_object() && data.contains("data") && data["data"].is_array())
-      arr = &data["data"];
-    if (!arr->is_array()) return result;
-
-    std::vector<std::pair<std::string, double>> ranked;
-    for (auto &d : *arr) {
-      auto [sym, vol] = src.parse(d);
-      if (!sym.empty() && vol > 0) ranked.emplace_back(sym, vol);
-    }
-    std::sort(ranked.begin(), ranked.end(),
-              [](auto &a, auto &b) { return a.second > b.second; });
-    for (int i = 0; i < std::min((int)ranked.size(), n); ++i)
-      result.push_back(ranked[i].first);
-    INFO_FLOG("[TradeVol] {}: top {} / {} pairs", src.name, result.size(), ranked.size());
-  } catch (const std::exception &e) {
-    WARNING_FLOG("[TradeVol] {} parse failed: {}", src.name, e.what());
-  }
-  return result;
-}
-
-// 综合入口: 从所有可用交易所拉 Top N, 组装成 inst_str (如 btcusdt_spot.bn)
-static std::vector<std::string> fetch_all_top_pairs(int per_exch) {
-  std::vector<std::string> all;
-  for (auto &src : kVolumeSources) {
-    auto tops = fetch_top_n(src, per_exch);
-    for (auto &sym : tops) {
-      // 转小写 + 组装 inst_str: BTCUSDT → btcusdt, BTC_USDT → btc_usdt
-      std::string lower = sym;
-      std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
-      // 统一用 _ 分隔
-      if (lower.find('_') == std::string::npos) {
-        // BTCUSDT → 需要拆 base/quote
-        for (const char *q : {"usdt"}) {
-          if (lower.size() > 4 && lower.substr(lower.size() - 4) == q) {
-            lower = lower.substr(0, lower.size() - 4) + "_" + q;
-            break;
-          }
-        }
-      }
-      all.push_back(lower + "_spot." + src.exch_abbr);
-    }
-  }
-  return all;
-}
 
 STRATEGY_API_IMPLEMENT(TakingDemo)
 
@@ -167,17 +67,21 @@ bool TakingDemo::on_init(const Config *cfg) {
     subscribe_instruments(inst_str, true);
   }
 
-  // 动态订阅各交易所 Top N trade (仅用于成交额触发 FP)
-  auto trade_pairs = fetch_all_top_pairs(20);
-  for (auto &inst : trade_pairs) {
-    bool exists = false;
-    for (auto &s : subs)
-      if (s.position && s.position->instrument.GetSymbol() == inst) { exists = true; break; }
-    if (!exists)
-      subscribe_instruments(inst, true);
+  // 动态订阅 Top N trade (仅用于成交额触发 FP, 只订 trade 频道)
+  for (auto &pair : turnover_pairs_.filter_new(fetch_all_top_pairs(20))) {
+    auto inst_id = InstrumentId::Create(pair);
+    if (!inst_id.Valid()) continue;
+    auto *base_info = GetBaseInfo(inst_id);
+    auto IC_tmp = data::InstrumentComponent{inst_id, base_info, ""};
+    if (InstData_.IM.FindByInstStr(IC_tmp.inst_str)) continue; // 已存在
+    InstData_.IM.Insert(IC_tmp);
+    auto *IC = InstData_.IM.FindByUniId(IC_tmp.uni_id);
+    auto *posi = CreateSecurityPosition(inst_id);
+    ChangePositionToSingleSide(posi);
+    InstData_.trade_map[IC->uni_id] = data::trades_data{};
+    subs.emplace_back(SubTopic{posi, NOVA_COIN_QUOTE_TRADE, true});
   }
-  INFO_FLOG("[OnInit] Subscribed {} dynamic top-pairs for FP turnover trigger", trade_pairs.size());
-
+  INFO_FLOG("[OnInit] turnover subs: {}", turnover_pairs_.size());
   /*
   ! Initialize Variables
   */
@@ -223,7 +127,25 @@ bool TakingDemo::on_init(const Config *cfg) {
   OP_ = std::make_unique<OrderProcessor>(InstData_, CFG_, fps_map_, BlcMng_,
                                          global_ts);
   OP_->Init();
-  INFO_FLOG("[OnInit]FP generator and OrderProcessor initialized");
+  INFO_FLOG("[OnInit]FairPriceGenerator and OrderProcessor initialized");
+
+  // 加载 drift 表 (按 base 币种)
+  for (auto &c : CFG_.Strategy.Stable.trading_currencies) {
+    std::string base = data::get_currency_name(c);
+    if (base == "btc")
+      base = "xbt";
+    std::string drift_path = CFG_.Strategy.Stable.root_dir +
+                             "python/drift_tables/drift_" + base + "usd.csv";
+    try {
+      DriftTable dt;
+      if (dt.load(drift_path))
+        drift_tables_[base] = std::move(dt);
+      INFO_FLOG("[OnInit]Drift table {}: {}", base,
+                dt.empty() ? "not found" : "loaded");
+    } catch (const std::exception &e) {
+      WARNING_FLOG("[OnInit]Drift table load error {}: {}", base, e.what());
+    }
+  }
 
   scheduler_.init(CFG_.Strategy.Stable.negative_interval,
                   CFG_.Strategy.Stable.fp_turnover_usd,
@@ -340,13 +262,52 @@ void TakingDemo::do_calculations(int64_t current_ts) {
   }
 }
 
-void TakingDemo::process_disconnect(int64_t ts) {
-  // 断连处理: 撤所有挂单
+void TakingDemo::process_disconnect(int64_t /*ts*/) {
   INFO_FLOG("[Strategy] disconnect detected, cancelling all orders");
+  for (auto &id : InstData_.trading_ids) {
+    auto it = InstData_.order_map.find(id);
+    if (it == InstData_.order_map.end())
+      continue;
+    for (auto *order : it->second.left_order_)
+      CancelOrder(order);
+    it->second.left_order_.clear();
+  }
 }
 
 void TakingDemo::process_negative(int64_t ts) {
-  // 负收益订单处理: 检查和撤销
+  constexpr int64_t kStaleNs = 5'000'000'000LL;
+  for (auto &id : InstData_.trading_ids) {
+    auto *IC = InstData_.IM.FindByUniId(id);
+    if (!IC || !IC->flag_trading)
+      continue;
+    auto dd_it = InstData_.depth_map.find(id);
+    if (dd_it == InstData_.depth_map.end())
+      continue;
+    const auto &dd = dd_it->second;
+    if (!dd.valid || ts - dd.local_ts > kStaleNs) {
+      auto om_it = InstData_.order_map.find(id);
+      if (om_it == InstData_.order_map.end())
+        continue;
+      for (auto *order : om_it->second.left_order_)
+        CancelOrder(order);
+      om_it->second.left_order_.clear();
+      continue;
+    }
+    auto vol_it = InstData_.vol_map.find(id);
+    if (vol_it == InstData_.vol_map.end())
+      continue;
+    const auto &vd = vol_it->second;
+    if (std::isfinite(vd.abs_s_bps) && vd.abs_s_bps > 50.0) {
+      auto om_it = InstData_.order_map.find(id);
+      if (om_it == InstData_.order_map.end())
+        continue;
+      for (auto *order : om_it->second.left_order_)
+        CancelOrder(order);
+      om_it->second.left_order_.clear();
+      INFO_FLOG("[Negative] {} abs_s_bps={:.1f} > 50, cancelled", IC->inst_str,
+                vd.abs_s_bps);
+    }
+  }
 }
 
 void TakingDemo::process_fp(int64_t ts) {
@@ -354,8 +315,215 @@ void TakingDemo::process_fp(int64_t ts) {
   fpg_->update(ts);
 }
 
+// ─── 下单: OB档位漂移表 ───
+namespace {
+double default_half_spread_bps(data::currency base) {
+  switch (base) {
+  case data::currency::EUR:
+    return 2.0;
+  case data::currency::GBP:
+    return 3.0;
+  case data::currency::BTC:
+    return 5.0;
+  case data::currency::ETH:
+    return 5.0;
+  case data::currency::SOL:
+    return 10.0;
+  case data::currency::XRP:
+    return 5.0;
+  case data::currency::USDT:
+    return 1.0;
+  case data::currency::USDC:
+    return 1.0;
+  default:
+    return 5.0;
+  }
+}
+} // namespace
+
 void TakingDemo::process_order(int64_t ts) {
-  // 预处理 → 下单
+  constexpr int64_t kStaleNs = 5'000'000'000LL;
+  constexpr double kOrderUsd = 50.0;
+  constexpr int kMaxOrdersPerSide = 3;
+  constexpr double kMinPnlBps = 0.5;
+
+  for (auto &id : InstData_.trading_ids) {
+    auto *IC = InstData_.IM.FindByUniId(id);
+    if (!IC || !IC->flag_trading)
+      continue;
+
+    auto dd_it = InstData_.depth_map.find(id);
+    if (dd_it == InstData_.depth_map.end())
+      continue;
+    const auto &dd = dd_it->second;
+    if (!dd.valid || ts - dd.local_ts > kStaleNs)
+      continue;
+
+    auto vol_it = InstData_.vol_map.find(id);
+    if (vol_it != InstData_.vol_map.end()) {
+      if (std::isfinite(vol_it->second.abs_s_bps) &&
+          vol_it->second.abs_s_bps > 50.0)
+        continue;
+    }
+
+    double mid = 0.5 * (dd.bids[0][0] + dd.asks[0][0]);
+    if (mid <= 0)
+      continue;
+
+    double tick = (dd.tick_size > 0) ? dd.tick_size : 1e-5;
+    double base_qty = kOrderUsd / mid;
+    double qty_prec =
+        (IC->quantity_precision > 0) ? IC->quantity_precision : 1e-8;
+    base_qty = std::floor(base_qty / qty_prec) * qty_prec;
+    if (base_qty <= 0)
+      continue;
+
+    // 撤已有订单 (仅当价格变动超过 1 tick 时才撤, 减少订单流失)
+    auto om_it = InstData_.order_map.find(id);
+    double prev_best_bid = 0.0, prev_best_ask = 0.0;
+    if (om_it != InstData_.order_map.end()) {
+      for (auto *order : om_it->second.left_order_) {
+        if (order->order.side == NOVA_SIDE_BUY) {
+          if (order->order.price > prev_best_bid)
+            prev_best_bid = order->order.price;
+        } else {
+          if (prev_best_ask == 0.0 || order->order.price < prev_best_ask)
+            prev_best_ask = order->order.price;
+        }
+      }
+    }
+
+    auto *posi = (om_it != InstData_.order_map.end()) ? om_it->second.position_
+                                                      : nullptr;
+    if (!posi)
+      continue;
+
+    struct Candidate {
+      int level;
+      double pnl;
+      double price;
+      double fills;
+    };
+    std::vector<Candidate> ask_cands, bid_cands;
+
+    // 查 drift 表
+    auto *dt = [&]() -> DriftTable * {
+      auto it = drift_tables_.find(IC->base_str);
+      return (it != drift_tables_.end()) ? &it->second : nullptr;
+    }();
+
+    for (int lv = 0; lv < 25; ++lv) {
+      // ASK
+      double ask_p = dd.asks[lv][0];
+      if (ask_p > mid && ask_p < mid * 1.1) {
+        double pnl = default_half_spread_bps(IC->base);
+        double fills = 1.0;
+        if (dt && !dt->empty()) {
+          auto *entry = dt->lookup(1, lv, 60.0);
+          if (entry) {
+            pnl = entry->pnl_bps;
+            fills = entry->fills_per_day;
+          }
+        }
+        if (pnl > kMinPnlBps)
+          ask_cands.push_back({lv, pnl, ask_p, fills});
+      }
+      // BID
+      double bid_p = dd.bids[lv][0];
+      if (bid_p > 0 && bid_p < mid) {
+        double pnl = default_half_spread_bps(IC->base);
+        double fills = 1.0;
+        if (dt && !dt->empty()) {
+          auto *entry = dt->lookup(0, lv, 60.0);
+          if (entry) {
+            pnl = entry->pnl_bps;
+            fills = entry->fills_per_day;
+          }
+        }
+        if (pnl > kMinPnlBps)
+          bid_cands.push_back({lv, pnl, bid_p, fills});
+      }
+    }
+
+    auto rank = [](const Candidate &a, const Candidate &b) {
+      return a.pnl * a.fills > b.pnl * b.fills;
+    };
+    std::sort(ask_cands.begin(), ask_cands.end(), rank);
+    std::sort(bid_cands.begin(), bid_cands.end(), rank);
+
+    int n_ask = std::min(kMaxOrdersPerSide, (int)ask_cands.size());
+    int n_bid = std::min(kMaxOrdersPerSide, (int)bid_cands.size());
+
+    // 构建新目标价格集合, 只撤"价格已偏离 >1 tick"的已有订单
+    std::set<double> new_ask_px, new_bid_px;
+    for (int i = 0; i < n_ask; ++i) {
+      double px = std::ceil(ask_cands[i].price / tick) * tick;
+      if (px > mid)
+        new_ask_px.insert(px);
+    }
+    for (int i = 0; i < n_bid; ++i) {
+      double px = std::floor(bid_cands[i].price / tick) * tick;
+      if (px > 0 && px < mid)
+        new_bid_px.insert(px);
+    }
+
+    if (om_it != InstData_.order_map.end()) {
+      // 撤掉不在目标集合中的旧订单
+      std::vector<const OrderTp *> to_keep;
+      for (auto *order : om_it->second.left_order_) {
+        bool keep = false;
+        if (order->order.side == NOVA_SIDE_BUY)
+          keep = new_bid_px.count(order->order.price) > 0;
+        else
+          keep = new_ask_px.count(order->order.price) > 0;
+        if (keep && order->order_status != NOVA_ORDER_STATUS_CANCELLED &&
+            order->order_status != NOVA_ORDER_STATUS_REJECTED)
+          to_keep.push_back(order);
+        else if (order->order_status != NOVA_ORDER_STATUS_CANCELLED &&
+                 order->order_status != NOVA_ORDER_STATUS_FILLED)
+          CancelOrder(order);
+      }
+      om_it->second.left_order_.clear();
+      for (auto *o : to_keep)
+        om_it->second.left_order_.insert(o);
+    }
+
+    // 只发送不在已有订单中的新价格
+    for (double px : new_ask_px) {
+      bool exists = false;
+      if (om_it != InstData_.order_map.end())
+        for (auto *o : om_it->second.left_order_)
+          if (o->order.side == NOVA_SIDE_SELL && o->order.price == px) {
+            exists = true;
+            break;
+          }
+      if (exists)
+        continue;
+      auto *order = CreateOrder(posi, NOVA_PRICE_LIMIT, NOVA_SIDE_SELL,
+                                NOVA_POSITION_EFFECT_OPEN, base_qty, px);
+      if (order && SendOrder(order)) {
+        if (om_it != InstData_.order_map.end())
+          om_it->second.left_order_.insert(order);
+      }
+    }
+    for (double px : new_bid_px) {
+      bool exists = false;
+      if (om_it != InstData_.order_map.end())
+        for (auto *o : om_it->second.left_order_)
+          if (o->order.side == NOVA_SIDE_BUY && o->order.price == px) {
+            exists = true;
+            break;
+          }
+      if (exists)
+        continue;
+      auto *order = CreateOrder(posi, NOVA_PRICE_LIMIT, NOVA_SIDE_BUY,
+                                NOVA_POSITION_EFFECT_OPEN, base_qty, px);
+      if (order && SendOrder(order)) {
+        if (om_it != InstData_.order_map.end())
+          om_it->second.left_order_.insert(order);
+      }
+    }
+  }
 }
 
 void TakingDemo::accumulate_turnover(const data::InstrumentComponent &IC,
@@ -532,10 +700,11 @@ void TakingDemo::subscribe_instruments(std::string inst_str, bool sub_spot) {
     InstData_.vol_map[IC->uni_id] = data::vol_data();
     InstData_.insert_order_map.emplace(IC->uni_id, data::insert_orders_data());
     InstData_.order_map.emplace(IC->uni_id, data::OrderManager{inst_id, posi});
-    // 就地构造，避免在栈上创建约 10MB 的临时对象导致栈溢出
     pair_stats_.per_inst.emplace(std::piecewise_construct,
                                  std::forward_as_tuple(IC->uni_id),
                                  std::forward_as_tuple());
+    // 标记为做市标的
+    IC->flag_trading = true;
   } else {
     InstData_.bbo_map[IC->uni_id] = data::bbo_data();
     InstData_.bbo_map[IC->uni_id].tick_size = IC->tick_size;
@@ -564,45 +733,45 @@ void TakingDemo::on_trade(const Trade *, const SecurityPosition *) {}
 void TakingDemo::on_bbo(const BBO *, const SecurityPosition *) {}
 
 /****************************** order & trade******************************/
+// 从 left_order_ 中移除已完成的订单, 防止订单指针累积
+static void remove_from_orders(data::InstrumentData &InstData,
+                               const StrategyApi::OrderTp *order) {
+  if (!order)
+    return;
+  auto *IC = InstData.IM.FindByInstStr(order->order.instrument_id.GetSymbol());
+  if (!IC)
+    return;
+  auto it = InstData.order_map.find(IC->uni_id);
+  if (it != InstData.order_map.end())
+    it->second.left_order_.erase(order);
+}
+
 void TakingDemo::on_order_update(const StrategyApi::OrderTp *order,
                                  const SecurityPosition *) {
-  INFO_FLOG("[Strategy] on_order_update: qty={} filled={} left={}",
-            order ? order->order.quantity : 0, order ? order->qty_traded : 0,
-            order ? order->qty_left : 0);
+  if (order && order->qty_left <= 0)
+    remove_from_orders(InstData_, order);
 }
 
 void TakingDemo::on_order_cancelled(const StrategyApi::OrderTp *order,
-                                    const SecurityPosition *, double left) {
-  INFO_FLOG("[Strategy] on_order_cancelled: qty={} left={}",
-            order ? order->order.quantity : 0, left);
+                                    const SecurityPosition *, double) {
+  remove_from_orders(InstData_, order);
 }
 
-void TakingDemo::on_order_cancel_failed(const StrategyApi::OrderTp *order,
-                                        const SecurityPosition *,
-                                        int32_t reason) {
-  INFO_FLOG("[Strategy] on_order_cancel_failed: id={} reason={}",
-            order ? order->nova_id.sequence : 0, reason);
-}
+void TakingDemo::on_order_cancel_failed(const StrategyApi::OrderTp *,
+                                        const SecurityPosition *, int32_t) {}
 
 void TakingDemo::on_order_rejected(const StrategyApi::OrderTp *order,
-                                   const SecurityPosition *, int32_t reason) {
-  INFO_FLOG("[Strategy] on_order_rejected: qty={} price={} reason={}",
-            order ? order->order.quantity : 0, order ? order->order.price : 0,
-            reason);
+                                   const SecurityPosition *, int32_t) {
+  remove_from_orders(InstData_, order);
 }
 
 void TakingDemo::on_order_done(const StrategyApi::OrderTp *order,
-                               const SecurityPosition *, NOVA_ORDER_STATUS st) {
-  INFO_FLOG("[Strategy] on_order_done: qty={} qty_traded={} status={}",
-            order ? order->order.quantity : 0, order ? order->qty_traded : 0,
-            (int)st);
+                               const SecurityPosition *, NOVA_ORDER_STATUS) {
+  remove_from_orders(InstData_, order);
 }
 
-void TakingDemo::on_order_accepted(const StrategyApi::OrderTp *order,
-                                   const SecurityPosition *) {
-  INFO_FLOG("[Strategy] on_order_accepted: qty={} price={}",
-            order ? order->order.quantity : 0, order ? order->order.price : 0);
-}
+void TakingDemo::on_order_accepted(const StrategyApi::OrderTp *,
+                                   const SecurityPosition *) {}
 
 void TakingDemo::on_order_amended(const StrategyApi::OrderTp *,
                                   const SecurityPosition *, int32_t) {}

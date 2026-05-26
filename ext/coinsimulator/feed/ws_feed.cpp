@@ -8,7 +8,10 @@
 #include "nova_trader_api.h"
 #include "base/base_async_log.h"
 
+#pragma push_macro("Prefetch")
+#undef Prefetch
 #include "PushDataV3ApiWrapper.pb.h"
+#pragma pop_macro("Prefetch")
 
 #include <chrono>
 #include <cstdio>
