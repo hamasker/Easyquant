@@ -151,9 +151,14 @@ public:
     } else if (exchange_ == "coinbase" || exchange_ == "cb") {
       // Advanced Trade WS: channel (singular) + product_ids
       for (auto &ch : feed_.channels()) {
+        auto syms = feed_.symbols();
+        fprintf(stderr, "[CB_SUB] ch=%s product_ids=[", ch.c_str());
+        for (size_t i = 0; i < syms.size() && i < 5; ++i)
+          fprintf(stderr, "%s%s", (i?", ":""), syms[i].c_str());
+        fprintf(stderr, "] total=%zu\n", syms.size());
         nlohmann::json sub{{"type", "subscribe"},
                            {"channel", ch},
-                           {"product_ids", feed_.symbols()}};
+                           {"product_ids", syms}};
         api_->Send(sub.dump());
       }
       INFO_FLOG("[WSFeed] Subscribed to {} coinbase channels", feed_.channels().size());
@@ -440,6 +445,11 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
   if ((exchange == "cb" || exchange == "coinbase") &&
       (data.value("type", "") == "subscriptions" ||
        data.value("channel", "") == "subscriptions")) {
+    static int cb_sub_dbg = 0;
+    if (++cb_sub_dbg <= 5) {
+      std::string raw = data.dump();
+      fprintf(stderr, "[CB_SUB_RESP] %s\n", raw.c_str());
+    }
     return;
   }
 
