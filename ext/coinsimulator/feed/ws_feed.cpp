@@ -511,32 +511,43 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
   // Kraken trade: [channelID, [[price,vol,time,side,...],...], "trade", pair]
   if ((exchange == "krk" || exchange == "kraken") && data.is_array() &&
       data.size() >= 4 && data[2].is_string()) {
-    if (data[2].get<std::string>() == "trade") {
+    if (data[2].get<std::string>() == "trade" && data[1].is_array()) {
       std::string pair = data[3].get<std::string>();
-      // Kraken pair 格式: "XBT/USD" → 需要转换大小写找 symbol_to_inst_
-      auto it = symbol_to_inst_.find(pair);
-      if (it == symbol_to_inst_.end()) {
-        // 尝试小写匹配
-        std::string lower = pair;
-        std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+      // 尝试多种格式匹配 symbol_to_inst_
+      InstrumentId iid{};
+      for (auto &[k, v] : symbol_to_inst_) {
+        if (k == pair) { iid = v; break; }
+      }
+      if (!iid.Valid()) {
+        // "XBT/USD" → "xbtusd" 匹配
+        std::string flat = pair;
+        flat.erase(std::remove(flat.begin(), flat.end(), '/'), flat.end());
+        std::transform(flat.begin(), flat.end(), flat.begin(), ::tolower);
         for (auto &[k, v] : symbol_to_inst_) {
           std::string kl = k;
+          kl.erase(std::remove(kl.begin(), kl.end(), '/'), kl.end());
           std::transform(kl.begin(), kl.end(), kl.begin(), ::tolower);
-          if (kl == lower) { it = symbol_to_inst_.find(k); break; }
+          if (kl == flat) { iid = v; break; }
         }
       }
-      if (it != symbol_to_inst_.end() && data[1].is_array()) {
-        for (auto &t : data[1]) {
-          if (!t.is_array() || t.size() < 5) continue;
-          NovaCoinTrade trade{};
-          trade.instrument_id = it->second;
-          trade.price = std::stod(t[0].get<std::string>());
-          trade.qty = std::stod(t[1].get<std::string>());
-          trade.side = (t[3].get<std::string>() == "b") ? NOVA_SIDE_BUY : NOVA_SIDE_SELL;
-          trade.local_time = static_cast<int64_t>(std::stod(t[2].get<std::string>()) * 1e9);
-          trade.local_ns = local_ns;
-          dispatch(NOVA_COIN_QUOTE_TRADE, &trade, sizeof(trade));
-        }
+      if (!iid.Valid()) {
+        fprintf(stderr, "[KRK_TRADE_NO_MATCH] pair=%s\n", pair.c_str());
+        return;
+      }
+      static int krk_trade_first = 0;
+      for (auto &t : data[1]) {
+        if (!t.is_array() || t.size() < 5) continue;
+        NovaCoinTrade tr{};
+        tr.instrument_id = iid;
+        tr.price = std::stod(t[0].get<std::string>());
+        tr.qty = std::stod(t[1].get<std::string>());
+        tr.side = (t[3].get<std::string>() == "b") ? NOVA_SIDE_BUY : NOVA_SIDE_SELL;
+        tr.local_time = static_cast<int64_t>(std::stod(t[2].get<std::string>()) * 1e9);
+        tr.local_ns = local_ns;
+        dispatch(NOVA_COIN_QUOTE_TRADE, &tr, sizeof(tr));
+        if (++krk_trade_first <= 3)
+          fprintf(stderr, "[KRK_TRADE_OK] pair=%s px=%.4f qty=%.6f\n",
+                  pair.c_str(), tr.price, tr.qty);
       }
     }
     return;
