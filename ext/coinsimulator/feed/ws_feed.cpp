@@ -511,6 +511,12 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
   // Kraken trade: [channelID, [[price,vol,time,side,...],...], "trade", pair]
   if ((exchange == "krk" || exchange == "kraken") && data.is_array() &&
       data.size() >= 4 && data[2].is_string()) {
+    // DEBUG: 打印所有 Kraken array 消息的 channel 名和 pair
+    static int krk_arr_cnt = 0;
+    if (++krk_arr_cnt <= 20)
+      fprintf(stderr, "[KRK_ARR] ch=%s pair=%s size=%zu\n",
+              data[2].get<std::string>().c_str(),
+              data[3].get<std::string>().c_str(), data.size());
     if (data[2].get<std::string>() == "trade") {
       std::string pair = data[3].get<std::string>();
       // Kraken pair 格式: "XBT/USD" → 需要转换大小写找 symbol_to_inst_
@@ -540,6 +546,13 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
       }
     }
     return;
+  }
+
+  // DEBUG: dump Coinbase channel names
+  if ((exchange == "cb" || exchange == "coinbase") && data.is_object()) {
+    static int cb_cnt = 0;
+    if (++cb_cnt <= 20)
+      fprintf(stderr, "[CB_CH] channel=%s\n", data.value("channel", "?").c_str());
   }
 
   // Coinbase market_trades: {"channel":"market_trades","events":[{"trades":[...]}]}
