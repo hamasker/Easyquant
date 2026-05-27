@@ -8,17 +8,58 @@
 
 namespace symbol_mapping {
 
+// ─── Kraken 特殊映射 ───
+// Kraken 对大部分加密货币加 X/XX 前缀, 法币和稳定币不加
+// 规则: 3字母加 X, 4字母加 XX (如 XBT=BTC, XXRP=XRP, XETH=ETH)
+inline const std::unordered_map<std::string, std::string>& kraken_x_map() {
+  static const std::unordered_map<std::string, std::string> m = {
+    // Crypto (加 X/XX 前缀)
+    {"btc", "XBT"},    {"eth", "XETH"},   {"ltc", "XLTC"},
+    {"xrp", "XXRP"},   {"xlm", "XXLM"},   {"xmr", "XXMR"},
+    {"etc", "XETC"},   {"zec", "XZEC"},   {"rep", "XREP"},
+    {"mln", "XMLN"},   {"doge", "XXDG"},  {"dash", "DASH"},
+    // 其他常见 crypto
+    {"ada", "ADA"},    {"sol", "SOL"},    {"dot", "DOT"},
+    {"link", "LINK"},  {"matic", "MATIC"}, {"uni", "UNI"},
+    {"aave", "AAVE"},  {"atom", "ATOM"},  {"algo", "ALGO"},
+    {"xtz", "XTZ"},    {"fil", "FIL"},    {"trx", "TRX"},
+    {"avax", "AVAX"},  {"shib", "SHIB"},  {"ape", "APE"},
+    {"sand", "SAND"},  {"mana", "MANA"},  {"grt", "GRT"},
+    {"near", "NEAR"},  {"flow", "FLOW"},  {"icp", "ICP"},
+    {"fet", "FET"},    {"render", "RENDER"}, {"ondo", "ONDO"},
+    {"sui", "SUI"},    {"sei", "SEI"},    {"tia", "TIA"},
+    {"bonk", "BONK"},  {"wif", "WIF"},    {"jup", "JUP"},
+    {"pyth", "PYTH"},  {"pengu", "PENGU"}, {"trump", "TRUMP"},
+    {"pepe", "PEPE"},  {"floki", "FLOKI"}, {"gala", "GALA"},
+    {"ens", "ENS"},    {"ldo", "LDO"},    {"arb", "ARB"},
+    {"op", "OP"},      {"strk", "STRK"},  {"ena", "ENA"},
+    {"eigen", "EIGEN"}, {"pendle", "PENDLE"}, {"axs", "AXS"},
+    {"sand", "SAND"},  {"mana", "MANA"},  {"chz", "CHZ"},
+    {"bch", "BCH"},    {"bsv", "BSV"},
+    // Stablecoins & Fiat (不加前缀, 独立映射)
+    {"usd", "ZUSD"},   {"eur", "ZEUR"},   {"gbp", "ZGBP"},
+    {"aud", "ZAUD"},   {"cad", "ZCAD"},   {"chf", "ZCHF"},
+    {"usdt", "USDT"},  {"usdc", "USDC"},  {"dai", "DAI"},
+    {"paxg", "PAXG"},  {"paxgold", "PAXG"},
+    {"eurc", "EURC"},  {"pyusd", "PYUSD"},
+    {"tbtc", "TBTC"},  {"wbtc", "WBTC"},
+    {"ausd", "AUSD"},  {"usde", "USDE"},  {"usds", "USDS"},
+    {"usd1", "USD1"},  {"usdq", "USDQ"},  {"usdr", "USDR"},
+    {"usduc", "USDUC"}, {"usdd", "USDD"},
+    {"xaub", "XAUT"},
+  };
+  return m;
+}
+
 // ─── 交易所特定纠错规则 ───
-// Kraken: BTC → XBT (历史原因, Kraken 用 XBT)
-// 其他所: 统一用 BTC
 inline std::string fix_special(const std::string &base_or_quote,
                                 const std::string &exchange) {
   std::string s = base_or_quote;
   std::transform(s.begin(), s.end(), s.begin(), ::tolower);
   if (exchange == "krk" || exchange == "kraken") {
-    if (s == "btc") return "XBT";
+    auto it = kraken_x_map().find(s);
+    if (it != kraken_x_map().end()) return it->second;
   }
-  // 其他交易所不需要特殊处理, 直接大写
   std::transform(s.begin(), s.end(), s.begin(), ::toupper);
   return s;
 }
