@@ -232,11 +232,25 @@ public:
       auto data = nlohmann::json::parse(std::string_view(msg, len));
       feed_.ProcessRawMessage(exchange_, data);
     } catch (const std::exception &ex) {
-      static int krk_parse_err = 0;
+      // Kraken v2 可能一次推送多条拼接 JSON, 逐条拆分
       if (exchange_ == "krk" || exchange_ == "kraken") {
-        if (++krk_parse_err <= 5)
-          fprintf(stderr, "[KRK_RAW] len=%zu first_byte=0x%02x data=%.50s\n",
-                  len, (unsigned char)msg[0], msg);
+        std::string_view sv(msg, len);
+        size_t pos = 0, depth = 0, start = 0;
+        bool ok = false;
+        for (size_t i = 0; i < sv.size(); ++i) {
+          if (sv[i] == '{') { if (depth++ == 0) start = i; }
+          else if (sv[i] == '}') {
+            if (--depth == 0) {
+              try {
+                auto j = nlohmann::json::parse(sv.substr(start, i - start + 1));
+                feed_.ProcessRawMessage(exchange_, j);
+                ok = true;
+              } catch (...) {}
+              start = i + 1;
+            }
+          }
+        }
+        if (ok) return;
       }
       ERROR_FLOG("[WSFeed] {} parse error: {}", exchange_, ex.what());
     }
