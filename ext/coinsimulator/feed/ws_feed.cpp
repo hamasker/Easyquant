@@ -850,10 +850,6 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
   if (data.contains("arg") && data.contains("data") && data["data"].is_array()) {
     const auto &arg = data["arg"];
     std::string ch = arg.value("channel", "");
-    static int ok_gt_cnt = 0;
-    if (++ok_gt_cnt <= 10)
-      fprintf(stderr, "[ARG_CH] ex=%s ch=%s items=%zu\n",
-              exchange.c_str(), ch.c_str(), data["data"].size());
     const auto &items = data["data"];
     if (items.empty()) return;
 
@@ -902,7 +898,15 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
       return;
     }
     if (ch == "trades") {
+      static int ok_tr2 = 0;
       for (auto &t : items) {
+        if (++ok_tr2 <= 3)
+          fprintf(stderr, "[OK_TR] inst_valid=%d px=%s sz=%s side=%s ts=%s\n",
+                  inst_id.Valid() ? 1 : 0,
+                  t.contains("px") ? t["px"].dump().c_str() : "?",
+                  t.contains("sz") ? t["sz"].dump().c_str() : "?",
+                  t.contains("side") ? t["side"].dump().c_str() : "?",
+                  t.contains("ts") ? t["ts"].dump().c_str() : "?");
         if (!t.is_object()) continue;
         NovaCoinTrade trade{};
         if (inst_id.Valid()) trade.instrument_id = inst_id;
