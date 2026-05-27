@@ -534,20 +534,23 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
     if (ch.empty() || !data.contains("data") || !data["data"].is_array()) return;
     const auto &items = data["data"];
 
-    // 通用 symbol 匹配 (v2 "BTC/USD" vs v1 "XBT/USD" 等格式)
+    // 通用 symbol 匹配 (v2 "BTC/USD" ↔ v1 "XBT/USD" 等格式)
     auto find_inst = [&](const std::string &sym) {
-      // 直接匹配
       auto it = symbol_to_inst_.find(sym);
       if (it != symbol_to_inst_.end()) return it;
-      // 去斜杠小写匹配
+      // 去斜杠小写, XBT↔BTC
       std::string flat = sym;
       flat.erase(std::remove(flat.begin(), flat.end(), '/'), flat.end());
       std::transform(flat.begin(), flat.end(), flat.begin(), ::tolower);
+      // 也尝试 BTC→XBT 转换
+      std::string flat_xbt = flat;
+      size_t p = flat_xbt.find("btc");
+      if (p != std::string::npos) flat_xbt.replace(p, 3, "xbt");
       for (auto &[k, v] : symbol_to_inst_) {
         std::string kl = k;
         kl.erase(std::remove(kl.begin(), kl.end(), '/'), kl.end());
         std::transform(kl.begin(), kl.end(), kl.begin(), ::tolower);
-        if (kl == flat) return symbol_to_inst_.find(k);
+        if (kl == flat || kl == flat_xbt) return symbol_to_inst_.find(k);
       }
       return symbol_to_inst_.end();
     };
