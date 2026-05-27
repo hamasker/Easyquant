@@ -453,9 +453,15 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
                                const nlohmann::json &data) {
   if (data.contains("result") && data.contains("id") && !data.contains("e"))
     return;
-  // 跳过 Kraken v2 订阅确认 (method/success)
+  // Kraken v2 订阅确认 — 先看是否成功
   if ((exchange == "krk" || exchange == "kraken") && data.is_object()) {
-    if (data.contains("method") || data.contains("success")) return;
+    if (data.contains("success")) {
+      bool ok = data["success"].get<bool>();
+      if (!ok)
+        ERROR_FLOG("[WSFeed] krk subscribe failed: {}", data.value("error", "?"));
+      return;
+    }
+    if (data.contains("method")) return;
   }
   // 跳过 Coinbase 订阅确认 / 心跳
   if ((exchange == "cb" || exchange == "coinbase") &&
