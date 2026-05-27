@@ -137,7 +137,7 @@ public:
         }
         nlohmann::json params{{"channel", ch}, {"symbol", syms}};
         if (ch == "book") params["depth"] = 10;
-        if (ch == "trade") params["snapshot"] = false;
+        if (ch == "trade") params["snapshot"] = true;  // 先拿最近50笔成交
         nlohmann::json sub{{"method", "subscribe"}, {"params", params}};
         api_->Send(sub.dump());
       }
