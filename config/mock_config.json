@@ -51,8 +51,7 @@
             "enabled": true,
             "queue": "NOVA_QUOTE_BINANCE_USDT_SWAP",
             "channels": [
-                "bbo",
-                "trade"
+                "bbo"
             ],
             "core": -1
         },
@@ -60,7 +59,6 @@
             "enabled": true,
             "queue": "NOVA_QUOTE_KRAKEN_SPOT",
             "channels": [
-                "bbo",
                 "depth",
                 "trade"
             ],
