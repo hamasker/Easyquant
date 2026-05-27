@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <functional>
 #include <regex>
+#include <unordered_set>
 #include <utility>
 
 #include "nlohmann_json/json.hpp"
@@ -74,7 +75,19 @@ static const VolumeSource kVolumeSources[] = {
        if (vol <= 0) return {"", 0};
        std::string base = d.value("base_currency", "");
        std::string quote = d.value("quote_currency", "");
-       if (base.empty() || quote.empty()) return {"", 0};
+       // 只取主流币 (Coinbase 按数量排, 土狗币基数大但不值钱)
+       static const std::unordered_set<std::string> majors = {
+         "BTC","ETH","SOL","XRP","USDT","USDC","LINK","MATIC","UNI","AAVE",
+         "ATOM","DOT","LTC","BCH","AVAX","NEAR","FIL","ARB","OP","SUI",
+         "APT","PEPE","SHIB","DOGE","WIF","BONK","FLOKI"};
+       std::string base_up = base;
+       std::transform(base_up.begin(), base_up.end(), base_up.begin(), ::toupper);
+       if (!majors.count(base_up)) return {"", 0};
+       // 只取 USD/USDT/EUR/GBP quote
+       std::string quote_up = quote;
+       std::transform(quote_up.begin(), quote_up.end(), quote_up.begin(), ::toupper);
+       if (quote_up != "USD" && quote_up != "USDT" && quote_up != "EUR" && quote_up != "GBP")
+         return {"", 0};
        return {base + "_" + quote, vol};
      }},
 };

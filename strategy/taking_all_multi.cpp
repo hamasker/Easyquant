@@ -80,7 +80,8 @@ bool TakingDemo::on_init(const Config *cfg) {
 
   // 2. top-N 中未订阅的补上 (只订 trade)
   auto top_pairs = fetch_all_top_pairs(20);
-  INFO_FLOG("[OnInit] fetch_all_top_pairs: {}", sum_util::ToString(top_pairs));
+  INFO_FLOG("[OnInit] fetch_all_top_pairs({}): {}", top_pairs.size(),
+            sum_util::ToString(top_pairs));
   for (auto &pair : turnover_pairs_.filter_new(top_pairs)) {
     auto inst_id = InstrumentId::Create(pair);
     if (!inst_id.Valid())
@@ -94,8 +95,7 @@ bool TakingDemo::on_init(const Config *cfg) {
     subs.emplace_back(SubTopic{posi, NOVA_COIN_QUOTE_TRADE, true});
     turnover_pairs_.add_id(IC_tmp.uni_id, pair);
   }
-  INFO_FLOG("[OnInit] turnover subs: {}", turnover_pairs_.size());
-  INFO_FLOG("[OnInit] turnover subs: {}",
+  INFO_FLOG("[OnInit] turnover {} subs: {}", turnover_pairs_.size(),
             sum_util::ToString(turnover_pairs_.subscribed_str));
   /*
   ! Initialize Variables
