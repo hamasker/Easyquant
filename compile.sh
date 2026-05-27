@@ -11,7 +11,7 @@ cd "$SCRIPT_DIR"
 cd build
 
 cmake .. -DCMAKE_C_COMPILER=/usr/bin/gcc -DCMAKE_CXX_COMPILER=/usr/bin/g++ -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
-make -j32
+make -j2
 
 # 复制 compile_commands.json 到项目根目录
 cp compile_commands.json ..
