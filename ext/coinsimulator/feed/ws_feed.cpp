@@ -282,12 +282,12 @@ MapChannels(const std::string &exchange,
   for (auto &ch : generic) {
     if (exchange == "binance" || exchange == "bn") {
       if (ch == "bbo") out.push_back("bookTicker");
-      else if (ch == "depth") out.push_back("depth@100ms");
+      else if (ch == "depth") out.push_back("depth");  // 实时增量
       else if (ch == "trade") out.push_back("trade");
       else out.push_back(ch);
     } else if (exchange == "bn_swap") {
       if (ch == "bbo") out.push_back("bookTicker");
-      else if (ch == "depth") out.push_back("depth@100ms");
+      else if (ch == "depth") out.push_back("depth");  // 实时增量
       else if (ch == "trade") out.push_back("trade");
       else out.push_back(ch);
     } else if (exchange == "kraken" || exchange == "krk") {
@@ -719,36 +719,42 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
     }
   }
 
-  // Binance depthUpdate: b/a 是数组, e == "depthUpdate"
-  // 必须在 BBO 检查之前, 因为 depth 也有 b/a 键
+  // Binance depthUpdate: b/a 是数组, e == "depthUpdate" (实时增量, 维护本地簿)
   if (payload->contains("b") && payload->contains("a") &&
       (*payload)["b"].is_array() && (*payload)["a"].is_array()) {
+    if (!inst_id.Valid()) return;
+    auto &[bids, asks] = local_book_[inst_id.key()];
+    // 首次收到该 symbol → 视为 snapshot, 清空重建
+    bool first = bids.empty() && asks.empty();
+    auto apply = [&](const nlohmann::json &arr, bool is_bid) {
+      for (auto &lv : arr) {
+        if (!lv.is_array() || lv.size() < 2) continue;
+        double px = lv[0].is_string() ? std::stod(lv[0].get<std::string>()) : lv[0].get<double>();
+        double qty = lv[1].is_string() ? std::stod(lv[1].get<std::string>()) : lv[1].get<double>();
+        if (first || qty > 0) {
+          if (qty <= 0) { if (is_bid) bids.erase(px); else asks.erase(px); }
+          else { if (is_bid) bids[px] = qty; else asks[px] = qty; }
+        }
+      }
+    };
+    apply((*payload)["b"], true);
+    apply((*payload)["a"], false);
+    // 合成全档 DEPTH
     NovaCoinDepth depth{};
-    if (inst_id.Valid()) depth.instrument_id = inst_id;
-    depth.update_time = payload->value("E", int64_t{0}) * 1'000'000;
+    depth.instrument_id = inst_id;
     depth.local_ns = local_ns;
-
-    const auto &bids = (*payload)["b"];
-    const auto &asks = (*payload)["a"];
-    size_t bc = std::min(bids.size(), (size_t)NovaCoinDepth::MAX_PRICE_LEVEL);
-    size_t ac = std::min(asks.size(), (size_t)NovaCoinDepth::MAX_PRICE_LEVEL);
-    for (size_t i = 0; i < bc; ++i) {
-      depth.bid[i].price = bids[i][0].is_string()
-                               ? std::stod(bids[i][0].get<std::string>())
-                               : bids[i][0].get<double>();
-      depth.bid[i].qty = bids[i][1].is_string()
-                              ? std::stod(bids[i][1].get<std::string>())
-                              : bids[i][1].get<double>();
+    int i = 0;
+    for (auto &[px, qty] : bids) {
+      if (i >= NovaCoinDepth::MAX_PRICE_LEVEL) break;
+      depth.bid[i].price = px; depth.bid[i].qty = qty; ++i;
     }
-    for (size_t i = 0; i < ac; ++i) {
-      depth.ask[i].price = asks[i][0].is_string()
-                               ? std::stod(asks[i][0].get<std::string>())
-                               : asks[i][0].get<double>();
-      depth.ask[i].qty = asks[i][1].is_string()
-                              ? std::stod(asks[i][1].get<std::string>())
-                              : asks[i][1].get<double>();
+    depth.ob_level = static_cast<uint16_t>(i);
+    i = 0;
+    for (auto &[px, qty] : asks) {
+      if (i >= NovaCoinDepth::MAX_PRICE_LEVEL) break;
+      depth.ask[i].price = px; depth.ask[i].qty = qty; ++i;
     }
-    depth.ob_level = static_cast<uint16_t>(std::max(bc, ac));
+    depth.ob_level = static_cast<uint16_t>(std::max((int)depth.ob_level, i));
     dispatch(NOVA_COIN_QUOTE_DEPTH, &depth, sizeof(depth));
     return;
   }
