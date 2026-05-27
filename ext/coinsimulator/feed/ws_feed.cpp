@@ -572,7 +572,12 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
     };
 
     if (ch == "trade") {
+      static int _tr = 0;
       for (auto &d : items) {
+        if (++_tr <= 3)
+          fprintf(stderr, "[V2_TR] items=%zu trades=%zu\n",
+                  items.size(),
+                  d.contains("trades")&&d["trades"].is_array()?d["trades"].size():0);
         auto it = find_inst(d.value("symbol", ""));
         if (it == symbol_to_inst_.end()) continue;
         if (!d.contains("trades") || !d["trades"].is_array()) continue;
@@ -594,6 +599,8 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
     }
 
     if (ch == "ticker") {
+      static int _tk = 0;
+      if (++_tk <= 3) fprintf(stderr, "[V2_TK] items=%zu\n", items.size());
       for (auto &d : items) {
         auto it = find_inst(d.value("symbol", ""));
         if (it == symbol_to_inst_.end()) continue;
