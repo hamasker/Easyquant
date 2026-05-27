@@ -41,14 +41,13 @@ std::string ExtractSymbol(const std::string &exchange,
     return "";
   }
   if (exchange == "kraken" || exchange == "krk") {
-    // Kraken depth: data is array like [channel, {data}, "pair", ...]
-    // Kraken ticker: data is array like [channel, {data}, "pair"]
-    if (data.is_array() && data.size() >= 4 && data[3].is_string()) {
+    // v2: {"channel":"...","data":[{"symbol":"BTC/USD"},...]}
+    if (data.contains("data") && data["data"].is_array() &&
+        !data["data"].empty() && data["data"][0].is_object())
+      return data["data"][0].value("symbol", "");
+    // v1 fallback
+    if (data.is_array() && data.size() >= 4 && data[3].is_string())
       return data[3].get<std::string>();
-    }
-    if (data.is_array() && data.size() >= 2 && data[2].is_string()) {
-      return data[2].get<std::string>();
-    }
     return "";
   }
   if (exchange == "okx" || exchange == "ok") {
@@ -126,18 +125,23 @@ public:
       api_->Send(sub.dump());
       INFO_FLOG("[WSFeed] Subscribed to {} binance streams", params.size());
     } else if (exchange_ == "kraken" || exchange_ == "krk") {
-      for (auto &sym : feed_.symbols()) {
-        for (auto &ch : feed_.channels()) {
-          nlohmann::json sub_params{{"name", ch}};
-          // book 频道默认只给 10 档, 需要显式指定 depth 才能拿到更多
-          if (ch == "book") sub_params["depth"] = 10;  // 10 档初始化更快
-          nlohmann::json sub{{"event", "subscribe"},
-                             {"pair", {sym}},
-                             {"subscription", sub_params}};
-          api_->Send(sub.dump());
+      // v2: JSON-RPC 订阅, 每个频道一组 symbol; XBT→BTC 转换
+      for (auto &ch : feed_.channels()) {
+        nlohmann::json syms = nlohmann::json::array();
+        for (auto &s : feed_.symbols()) {
+          std::string sym = s;
+          // v2 用 BTC 而非 XBT
+          size_t p = sym.find("XBT");
+          if (p != std::string::npos) sym.replace(p, 3, "BTC");
+          syms.push_back(sym);
         }
+        nlohmann::json params{{"channel", ch}, {"symbol", syms}};
+        if (ch == "book") params["depth"] = 10;
+        if (ch == "trade") params["snapshot"] = false;
+        nlohmann::json sub{{"method", "subscribe"}, {"params", params}};
+        api_->Send(sub.dump());
       }
-      INFO_FLOG("[WSFeed] Subscribed to kraken streams");
+      INFO_FLOG("[WSFeed] Subscribed to {} kraken v2 channels", feed_.channels().size());
     } else if (exchange_ == "okx" || exchange_ == "ok") {
       std::vector<nlohmann::json> args;
       for (auto &sym : feed_.symbols()) {
@@ -230,6 +234,25 @@ public:
       auto data = nlohmann::json::parse(std::string_view(msg, len));
       feed_.ProcessRawMessage(exchange_, data);
     } catch (const std::exception &ex) {
+      // Kraken v2 可能多条 JSON 拼在一个 frame, 换行分割逐条 parse
+      if (exchange_ == "krk" || exchange_ == "kraken") {
+        std::string raw(msg, len);
+        size_t start = 0;
+        bool ok = false;
+        for (size_t i = 0; i <= raw.size(); ++i) {
+          if (i == raw.size() || raw[i] == '\n') {
+            if (i > start) {
+              try {
+                auto j = nlohmann::json::parse(raw.substr(start, i - start));
+                feed_.ProcessRawMessage(exchange_, j);
+                ok = true;
+              } catch (...) {}
+            }
+            start = i + 1;
+          }
+        }
+        if (ok) return;
+      }
       ERROR_FLOG("[WSFeed] {} parse error: {}", exchange_, ex.what());
     }
   }
@@ -268,9 +291,9 @@ MapChannels(const std::string &exchange,
       else if (ch == "trade") out.push_back("trade");
       else out.push_back(ch);
     } else if (exchange == "kraken" || exchange == "krk") {
-      if (ch == "bbo") out.push_back("spread");
-      else if (ch == "depth") out.push_back("book");
-      else if (ch == "trade") out.push_back("trade");
+      if (ch == "bbo") out.push_back("ticker");        // v2
+      else if (ch == "depth") out.push_back("book");   // v2
+      else if (ch == "trade") out.push_back("trade");  // v2
       else out.push_back(ch);
     } else if (exchange == "okx" || exchange == "ok") {
       if (ch == "bbo") out.push_back("bbo-tbt");
@@ -320,7 +343,7 @@ bool WSFeed::Initialize(const nova::base::Config &cfg) {
   } else if (exchange_ == "bn_swap") {
     ws_url_ = "wss://fstream.binance.com/ws";
   } else if (exchange_ == "kraken" || exchange_ == "krk") {
-    ws_url_ = "wss://ws.kraken.com";
+    ws_url_ = "wss://ws.kraken.com/v2";
   } else if (exchange_ == "okx" || exchange_ == "ok") {
     ws_url_ = "wss://ws.okx.com:8443/ws/v5/public";
   } else if (exchange_ == "coinbase" || exchange_ == "cb") {
@@ -430,9 +453,9 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
                                const nlohmann::json &data) {
   if (data.contains("result") && data.contains("id") && !data.contains("e"))
     return;
-  // 跳过 Kraken 订阅确认/状态/心跳消息 (非行情, 无 instrument_id)
+  // 跳过 Kraken v2 订阅确认 (method/success)
   if ((exchange == "krk" || exchange == "kraken") && data.is_object()) {
-    if (data.contains("event") || data.contains("errorMessage")) return;
+    if (data.contains("method") || data.contains("success")) return;
   }
   // 跳过 Coinbase 订阅确认 / 心跳
   if ((exchange == "cb" || exchange == "coinbase") &&
@@ -504,34 +527,81 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
     (void)size;
   };
 
-  // Kraken trade: [channelID, [[price,vol,time,side,...],...], "trade", pair]
-  if ((exchange == "krk" || exchange == "kraken") && data.is_array() &&
-      data.size() >= 4 && data[2].is_string()) {
-    if (data[2].get<std::string>() == "trade" && data[1].is_array()) {
-      // pair 格式 "XBT/USD" → 去掉 / 小写后匹配 symbol_to_inst_ (如 "xbtusd")
-      std::string pair = data[3].get<std::string>();
-      std::string flat = pair;
-      flat.erase(std::remove(flat.begin(), flat.end(), '/'), flat.end());
-      std::transform(flat.begin(), flat.end(), flat.begin(), ::tolower);
-      for (auto &[k, v] : symbol_to_inst_) {
-        std::string kl = k;
-        kl.erase(std::remove(kl.begin(), kl.end(), '/'), kl.end());
-        std::transform(kl.begin(), kl.end(), kl.begin(), ::tolower);
-        if (kl == flat) {
-          for (auto &t : data[1]) {
-            if (!t.is_array() || t.size() < 5) continue;
-            NovaCoinTrade tr{};
-            tr.instrument_id = v;
-            tr.price = std::stod(t[0].get<std::string>());
-            tr.qty = std::stod(t[1].get<std::string>());
-            tr.side = (t[3].get<std::string>() == "b") ? NOVA_SIDE_BUY : NOVA_SIDE_SELL;
-            tr.local_time = static_cast<int64_t>(std::stod(t[2].get<std::string>()) * 1e9);
-            tr.local_ns = local_ns;
-            dispatch(NOVA_COIN_QUOTE_TRADE, &tr, sizeof(tr));
-          }
-          break;
+  // Kraken v2: {"channel":"trade/book/ticker","type":"snapshot/update","data":[...]}
+  if ((exchange == "krk" || exchange == "kraken") && data.is_object()) {
+    if (data.contains("method") || data.contains("success")) return;
+    std::string ch = data.value("channel", "");
+    if (ch.empty() || !data.contains("data") || !data["data"].is_array()) return;
+    const auto &items = data["data"];
+
+    if (ch == "trade") {
+      for (auto &d : items) {
+        // symbol 格式 "BTC/USD", v2 用 BTC 而非 XBT
+        std::string sym = d.value("symbol", "");
+        if (!sym.empty()) {
+          size_t p = sym.find("XBT");
+          if (p != std::string::npos) sym.replace(p, 3, "BTC");
+        }
+        auto it = symbol_to_inst_.find(sym);
+        if (it == symbol_to_inst_.end()) continue;
+        if (!d.contains("trades") || !d["trades"].is_array()) continue;
+        for (auto &t : d["trades"]) {
+          if (!t.is_object()) continue;
+          NovaCoinTrade tr{};
+          tr.instrument_id = it->second;
+          tr.price = t["price"].is_number() ? t["price"].get<double>()
+                     : std::stod(t["price"].get<std::string>());
+          tr.qty = t["qty"].is_number() ? t["qty"].get<double>()
+                   : std::stod(t["qty"].get<std::string>());
+          tr.side = (t.value("side", "") == "buy") ? NOVA_SIDE_BUY : NOVA_SIDE_SELL;
+          tr.local_time = local_ns;
+          tr.local_ns = local_ns;
+          dispatch(NOVA_COIN_QUOTE_TRADE, &tr, sizeof(tr));
         }
       }
+      return;
+    }
+
+    if (ch == "ticker") {
+      for (auto &d : items) {
+        auto it = symbol_to_inst_.find(d.value("symbol", ""));
+        if (it == symbol_to_inst_.end()) continue;
+        NovaCoinBBO bbo{};
+        bbo.instrument_id = it->second;
+        bbo.bid_price = d["bid"].is_number() ? d["bid"].get<double>() : std::stod(d["bid"].get<std::string>());
+        bbo.ask_price = d["ask"].is_number() ? d["ask"].get<double>() : std::stod(d["ask"].get<std::string>());
+        bbo.bid_qty = d["bid_qty"].is_number() ? d["bid_qty"].get<double>() : std::stod(d["bid_qty"].get<std::string>());
+        bbo.ask_qty = d["ask_qty"].is_number() ? d["ask_qty"].get<double>() : std::stod(d["ask_qty"].get<std::string>());
+        bbo.local_ns = local_ns;
+        dispatch(NOVA_COIN_QUOTE_BBO, &bbo, sizeof(bbo));
+      }
+      return;
+    }
+
+    if (ch == "book") {
+      for (auto &d : items) {
+        auto it = symbol_to_inst_.find(d.value("symbol", ""));
+        if (it == symbol_to_inst_.end()) continue;
+        NovaCoinDepth depth{};
+        depth.instrument_id = it->second;
+        depth.local_ns = local_ns;
+        auto fill = [&](const std::string &side, const nlohmann::json &arr) {
+          int i = 0;
+          for (auto &lv : arr) {
+            if (i >= NovaCoinDepth::MAX_PRICE_LEVEL || !lv.is_object()) break;
+            double px = lv["price"].is_number() ? lv["price"].get<double>() : std::stod(lv["price"].get<std::string>());
+            double qty = lv["qty"].is_number() ? lv["qty"].get<double>() : std::stod(lv["qty"].get<std::string>());
+            if (side == "bid") { depth.bid[i].price = px; depth.bid[i].qty = qty; }
+            else { depth.ask[i].price = px; depth.ask[i].qty = qty; }
+            ++i;
+          }
+          if (i > depth.ob_level) depth.ob_level = static_cast<uint16_t>(i);
+        };
+        if (d.contains("bids")) fill("bid", d["bids"]);
+        if (d.contains("asks")) fill("ask", d["asks"]);
+        dispatch(NOVA_COIN_QUOTE_DEPTH, &depth, sizeof(depth));
+      }
+      return;
     }
     return;
   }
