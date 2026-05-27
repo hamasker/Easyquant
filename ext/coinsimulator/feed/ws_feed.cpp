@@ -547,16 +547,12 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
     // 通用 symbol 匹配
     static int _find_dbg = 0;
     auto find_inst = [&](const std::string &sym) -> decltype(symbol_to_inst_.begin()) {
-      if (++_find_dbg <= 5)
-        fprintf(stderr, "[V2_FIND] looking for '%s', map_size=%zu\n",
-                sym.c_str(), symbol_to_inst_.size());
       auto it = symbol_to_inst_.find(sym);
-      if (it != symbol_to_inst_.end()) return it;
+      if (it != symbol_to_inst_.end()) goto found;
       // 去斜杠小写, XBT↔BTC
-      std::string flat = sym;
+      { std::string flat = sym;
       flat.erase(std::remove(flat.begin(), flat.end(), '/'), flat.end());
       std::transform(flat.begin(), flat.end(), flat.begin(), ::tolower);
-      // 也尝试 BTC→XBT 转换
       std::string flat_xbt = flat;
       size_t p = flat_xbt.find("btc");
       if (p != std::string::npos) flat_xbt.replace(p, 3, "xbt");
@@ -564,9 +560,15 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
         std::string kl = k;
         kl.erase(std::remove(kl.begin(), kl.end(), '/'), kl.end());
         std::transform(kl.begin(), kl.end(), kl.begin(), ::tolower);
-        if (kl == flat || kl == flat_xbt) return symbol_to_inst_.find(k);
-      }
+        if (kl == flat || kl == flat_xbt) { it = symbol_to_inst_.find(k); goto found; }
+      } }
+      if (++_find_dbg <= 10)
+        fprintf(stderr, "[V2_FIND] '%s' NOT FOUND (map_size=%zu)\n", sym.c_str(), symbol_to_inst_.size());
       return symbol_to_inst_.end();
+    found:
+      if (++_find_dbg <= 10)
+        fprintf(stderr, "[V2_FIND] '%s' -> OK\n", sym.c_str());
+      return it;
     };
 
     if (ch == "trade") {
