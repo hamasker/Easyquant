@@ -538,25 +538,13 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
     if (data.contains("method") || data.contains("success")) return;
     std::string ch = data.value("channel", "");
     if (ch.empty() || !data.contains("data") || !data["data"].is_array()) return;
-    static int _v2_keys = 0;
-    if (++_v2_keys == 1) {
-      fprintf(stderr, "[V2_KEYS] symbol_to_inst_ sample: ");
-      int n = 0;
-      for (auto &[k, _] : symbol_to_inst_) {
-        if (n++ >= 10) break;
-        fprintf(stderr, "%s ", k.c_str());
-      }
-      fprintf(stderr, "\n");
-    }
     const auto &items = data["data"];
 
-    // 通用 symbol 匹配
-    static int _find_dbg = 0;
+    // 通用 symbol 匹配 (v2 "BTC/USD" ↔ v1 "XBT/USD" 等格式)
     auto find_inst = [&](const std::string &sym) -> decltype(symbol_to_inst_.begin()) {
       auto it = symbol_to_inst_.find(sym);
-      if (it != symbol_to_inst_.end()) goto found;
-      // 去斜杠小写, XBT↔BTC
-      { std::string flat = sym;
+      if (it != symbol_to_inst_.end()) return it;
+      std::string flat = sym;
       flat.erase(std::remove(flat.begin(), flat.end(), '/'), flat.end());
       std::transform(flat.begin(), flat.end(), flat.begin(), ::tolower);
       std::string flat_xbt = flat;
@@ -566,15 +554,10 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
         std::string kl = k;
         kl.erase(std::remove(kl.begin(), kl.end(), '/'), kl.end());
         std::transform(kl.begin(), kl.end(), kl.begin(), ::tolower);
-        if (kl == flat || kl == flat_xbt) { it = symbol_to_inst_.find(k); goto found; }
-      } }
-      if (++_find_dbg <= 10)
-        fprintf(stderr, "[V2_FIND] '%s' NOT FOUND (map_size=%zu)\n", sym.c_str(), symbol_to_inst_.size());
+        if (kl == flat || kl == flat_xbt)
+          return symbol_to_inst_.find(k);
+      }
       return symbol_to_inst_.end();
-    found:
-      if (++_find_dbg <= 10)
-        fprintf(stderr, "[V2_FIND] '%s' -> OK\n", sym.c_str());
-      return it;
     };
 
     if (ch == "trade") {
@@ -597,8 +580,6 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
     }
 
     if (ch == "ticker") {
-      static int _tk = 0;
-      if (++_tk <= 3) fprintf(stderr, "[V2_TK] items=%zu\n", items.size());
       for (auto &d : items) {
         auto it = find_inst(d.value("symbol", ""));
         if (it == symbol_to_inst_.end()) continue;
