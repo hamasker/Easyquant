@@ -126,12 +126,21 @@ public:
       api_->Send(sub.dump());
       INFO_FLOG("[WSFeed] Subscribed to {} binance streams", params.size());
     } else if (exchange_ == "kraken" || exchange_ == "krk") {
-      // v2: JSON-RPC, symbol_mapping 统一处理 XBT↔BTC
+      // v2: 用标准名 (BTC 不是 XBT, XRP 不是 XXRP)
       for (auto &ch : feed_.channels()) {
         nlohmann::json syms = nlohmann::json::array();
         for (auto &s : feed_.symbols()) {
-          auto [base, quote] = symbol_mapping::split_pair(s, "krk");
-          syms.push_back(symbol_mapping::make_pair(base, quote, "krk"));
+          std::string sym = s;
+          // XBT→BTC, XETH→ETH, XXRP→XRP, XLTC→LTC, ...
+          for (auto &p : std::vector<std::pair<std::string,std::string>>{
+            {"XXBTZ","BTC/"},{"XBT/","BTC/"},{"XETH/","ETH/"},{"XXRP/","XRP/"},
+            {"XLTC/","LTC/"},{"XXLM/","XLM/"},{"XXMR/","XMR/"},
+            {"XETC/","ETC/"},{"XZEC/","ZEC/"}}) {
+            size_t pos = 0;
+            while ((pos = sym.find(p.first, pos)) != std::string::npos)
+              sym.replace(pos, p.first.size(), p.second), pos += p.second.size();
+          }
+          syms.push_back(sym);
         }
         nlohmann::json params{{"channel", ch}, {"symbol", syms}};
         if (ch == "book") params["depth"] = 10;
