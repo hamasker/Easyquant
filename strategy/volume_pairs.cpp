@@ -57,6 +57,26 @@ static const VolumeSource kVolumeSources[] = {
          return {"", 0};
        return {pair, std::stod(d.value("quote_volume", "0"))};
      }},
+    {"Coinbase", "cb",
+     "curl -s --max-time 5 "
+     "'https://api.exchange.coinbase.com/products/volume-summary' "
+     "2>/dev/null",
+     [](const nlohmann::json &d) -> std::pair<std::string, double> {
+       // 只取 USD 计价对
+       std::string quote = d.value("quote_currency", "");
+       if (quote != "USD") return {"", 0};
+       double vol = 0.0;
+       if (d.contains("spot_volume_24hour")) {
+         auto &v = d["spot_volume_24hour"];
+         if (v.is_string()) {
+           std::string vs = v.get<std::string>();
+           if (!vs.empty()) vol = std::stod(vs);
+         } else if (v.is_number()) vol = v.get<double>();
+       }
+       if (vol <= 0) return {"", 0};
+       std::string base = d.value("base_currency", "");
+       return {base + "_USD", vol};
+     }},
 };
 
 std::string http_get(const char *shell_cmd) {
