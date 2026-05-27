@@ -898,15 +898,7 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
       return;
     }
     if (ch == "trades") {
-      static int ok_tr2 = 0;
       for (auto &t : items) {
-        if (++ok_tr2 <= 3)
-          fprintf(stderr, "[OK_TR] inst_valid=%d px=%s sz=%s side=%s ts=%s\n",
-                  inst_id.Valid() ? 1 : 0,
-                  t.contains("px") ? t["px"].dump().c_str() : "?",
-                  t.contains("sz") ? t["sz"].dump().c_str() : "?",
-                  t.contains("side") ? t["side"].dump().c_str() : "?",
-                  t.contains("ts") ? t["ts"].dump().c_str() : "?");
         if (!t.is_object()) continue;
         NovaCoinTrade trade{};
         if (inst_id.Valid()) trade.instrument_id = inst_id;
