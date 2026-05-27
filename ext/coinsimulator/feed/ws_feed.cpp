@@ -232,28 +232,24 @@ public:
       auto data = nlohmann::json::parse(std::string_view(msg, len));
       feed_.ProcessRawMessage(exchange_, data);
     } catch (const std::exception &ex) {
-      // Kraken v2 多条 JSON 拼接, 逐条 parse
+      // Kraken v2 多条 JSON 换行分割, 逐条 parse
       if (exchange_ == "krk" || exchange_ == "kraken") {
-        std::string_view sv(msg, len);
-        size_t depth = 0, start = 0;
+        std::string raw(msg, len);
+        size_t start = 0;
         bool ok = false;
-        for (size_t i = 0; i < sv.size(); ++i) {
-          if (sv[i] == '{') { if (depth++ == 0) start = i; }
-          else if (sv[i] == '}') {
-            if (--depth == 0) {
+        for (size_t i = 0; i <= raw.size(); ++i) {
+          if (i == raw.size() || raw[i] == '\n') {
+            if (i > start) {
               try {
-                auto j = nlohmann::json::parse(sv.substr(start, i - start + 1));
+                auto j = nlohmann::json::parse(raw.substr(start, i - start));
                 feed_.ProcessRawMessage(exchange_, j);
                 ok = true;
               } catch (...) {}
-              start = i + 1;
             }
+            start = i + 1;
           }
         }
         if (ok) return;
-        static int dbg2 = 0;
-        if (++dbg2 <= 3)
-          fprintf(stderr, "[KRK_SPLIT_FAIL] len=%zu raw=%.200s\n", len, msg);
       }
       ERROR_FLOG("[WSFeed] {} parse error: {}", exchange_, ex.what());
     }
