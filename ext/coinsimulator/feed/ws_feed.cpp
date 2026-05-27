@@ -580,10 +580,12 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
     if (ch == "trade") {
       static int _tr = 0;
       for (auto &d : items) {
-        if (++_tr <= 3)
-          fprintf(stderr, "[V2_TR] items=%zu trades=%zu\n",
-                  items.size(),
-                  d.contains("trades")&&d["trades"].is_array()?d["trades"].size():0);
+        if (++_tr <= 3) {
+          std::string dump = d.dump();
+          fprintf(stderr, "[V2_TR] keys: ");
+          for (auto &[k,_] : d.items()) fprintf(stderr, "%s ", k.c_str());
+          fprintf(stderr, "| raw=%.300s\n", dump.c_str());
+        }
         auto it = find_inst(d.value("symbol", ""));
         if (it == symbol_to_inst_.end()) continue;
         if (!d.contains("trades") || !d["trades"].is_array()) continue;
