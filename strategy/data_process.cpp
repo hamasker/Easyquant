@@ -104,19 +104,26 @@ bool fetch_data(const nova::quote::DataInfo &one,
     const auto &data = *static_cast<const Trade *>(one.buffer().back());
     inst_str = data.instrument_id.symbol;
     ts = data.local_time;
-    auto id = id_map.at(inst_str);
+    auto it = id_map.find(inst_str);
+    if (it == id_map.end()) return false;
+    auto id = it->second;
+    // 先判断是否在 trade_map 中, 是才记录
+    if (!InstData_.trade_map.count(id)) return false;
     InstData_.trade_map[id].add_trade(data.local_time, data.side, data.price,
                                       data.qty);
-    if (!InstData_.depth_map.count(id) || !InstData_.bbo_map.count(id))
-      return false;
-    // 使用trade数据更新depth和bbo数据，提供更实时的价格信息
-    auto &depth_map = InstData_.depth_map[id];
-    auto &bbo_map = InstData_.bbo_map[id];
+    // 日志放在 depth/bbo 判断前面, 确保 turnover-only inst 也能打印
     if (CFG_.Strategy.Verbose.ob)
       DEBUG_FLOG("[Ob] trade {} side={} price={:.4f} qty={:.6f}", inst_str,
                  data.side == NOVA_SIDE_BUY ? "BUY" : "SELL", data.price,
                  data.qty);
-    extract_trade_data(data, depth_map, bbo_map, InstData_.delay_map);
+    // turnover-only inst 没有 depth/bbo, 跳过后续更新
+    if (!InstData_.depth_map.count(id) && !InstData_.bbo_map.count(id))
+      return false;
+    if (InstData_.depth_map.count(id) && InstData_.bbo_map.count(id)) {
+      auto &depth_map = InstData_.depth_map[id];
+      auto &bbo_map = InstData_.bbo_map[id];
+      extract_trade_data(data, depth_map, bbo_map, InstData_.delay_map);
+    }
   } else {
     throw std::invalid_argument("invalid quote type!");
   }
