@@ -2,6 +2,7 @@
 #include "mock/mock_trade_service.h"
 #include "mock/mock_trade_engine.h"
 #include "coinrunner_log.h"
+#include "common/symbol_mapping.h"
 
 #include "nova_api_datainfo.h"
 #include "nova_api_instrument.h"
@@ -125,19 +126,16 @@ public:
       api_->Send(sub.dump());
       INFO_FLOG("[WSFeed] Subscribed to {} binance streams", params.size());
     } else if (exchange_ == "kraken" || exchange_ == "krk") {
-      // v2: JSON-RPC 订阅, 每个频道一组 symbol; XBT→BTC 转换
+      // v2: JSON-RPC, symbol_mapping 统一处理 XBT↔BTC
       for (auto &ch : feed_.channels()) {
         nlohmann::json syms = nlohmann::json::array();
         for (auto &s : feed_.symbols()) {
-          std::string sym = s;
-          // v2 用 BTC 而非 XBT
-          size_t p = sym.find("XBT");
-          if (p != std::string::npos) sym.replace(p, 3, "BTC");
-          syms.push_back(sym);
+          auto [base, quote] = symbol_mapping::split_pair(s, "krk");
+          syms.push_back(symbol_mapping::make_pair(base, quote, "krk"));
         }
         nlohmann::json params{{"channel", ch}, {"symbol", syms}};
         if (ch == "book") params["depth"] = 10;
-        if (ch == "trade") params["snapshot"] = true;  // 先拿最近50笔成交
+        if (ch == "trade") params["snapshot"] = true;
         nlohmann::json sub{{"method", "subscribe"}, {"params", params}};
         api_->Send(sub.dump());
       }
@@ -540,21 +538,13 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
     if (ch.empty() || !data.contains("data") || !data["data"].is_array()) return;
     const auto &items = data["data"];
 
-    // 通用 symbol 匹配 (v2 "BTC/USD" ↔ v1 "XBT/USD" 等格式)
+    // 通用 symbol 匹配 (使用 symbol_mapping 归一化)
     auto find_inst = [&](const std::string &sym) -> decltype(symbol_to_inst_.begin()) {
       auto it = symbol_to_inst_.find(sym);
       if (it != symbol_to_inst_.end()) return it;
-      std::string flat = sym;
-      flat.erase(std::remove(flat.begin(), flat.end(), '/'), flat.end());
-      std::transform(flat.begin(), flat.end(), flat.begin(), ::tolower);
-      std::string flat_xbt = flat;
-      size_t p = flat_xbt.find("btc");
-      if (p != std::string::npos) flat_xbt.replace(p, 3, "xbt");
+      std::string norm = symbol_mapping::normalize(sym);
       for (auto &[k, v] : symbol_to_inst_) {
-        std::string kl = k;
-        kl.erase(std::remove(kl.begin(), kl.end(), '/'), kl.end());
-        std::transform(kl.begin(), kl.end(), kl.begin(), ::tolower);
-        if (kl == flat || kl == flat_xbt)
+        if (symbol_mapping::normalize(k) == norm)
           return symbol_to_inst_.find(k);
       }
       return symbol_to_inst_.end();
