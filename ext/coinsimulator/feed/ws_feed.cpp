@@ -277,7 +277,7 @@ MapChannels(const std::string &exchange,
     } else if (exchange == "okx" || exchange == "ok") {
       if (ch == "bbo") out.push_back("bbo-tbt");
       else if (ch == "depth") out.push_back("books5");
-      else if (ch == "trade") {} // OKX 公开频道无 trade
+      else if (ch == "trade") out.push_back("trades");
       else out.push_back(ch);
     } else if (exchange == "coinbase" || exchange == "cb") {
       if (ch == "bbo") out.push_back("level2");
@@ -895,6 +895,27 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
       }
       bbo.local_ns = local_ns;
       dispatch(NOVA_COIN_QUOTE_BBO, &bbo, sizeof(bbo));
+      return;
+    }
+    if (ch == "trades") {
+      for (auto &t : items) {
+        if (!t.is_object()) continue;
+        NovaCoinTrade trade{};
+        if (inst_id.Valid()) trade.instrument_id = inst_id;
+        trade.price = t["px"].is_string()
+                          ? std::stod(t["px"].get<std::string>())
+                          : t["px"].get<double>();
+        trade.qty = t["sz"].is_string()
+                        ? std::stod(t["sz"].get<std::string>())
+                        : t["sz"].get<double>();
+        std::string side = t.value("side", "");
+        trade.side = (side == "buy") ? NOVA_SIDE_BUY : NOVA_SIDE_SELL;
+        trade.local_time = t["ts"].is_string()
+                               ? static_cast<int64_t>(std::stod(t["ts"].get<std::string>()) * 1'000'000)
+                               : static_cast<int64_t>(t["ts"].get<int64_t>() * 1'000'000);
+        trade.local_ns = local_ns;
+        dispatch(NOVA_COIN_QUOTE_TRADE, &trade, sizeof(trade));
+      }
       return;
     }
     if (ch == "books" || ch == "books5") {
