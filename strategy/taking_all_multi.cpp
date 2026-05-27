@@ -76,7 +76,8 @@ bool TakingDemo::on_init(const Config *cfg) {
   // 2. top-N 中未订阅的补上 (只订 trade)
   for (auto &pair : turnover_pairs_.filter_new(fetch_all_top_pairs(20))) {
     auto inst_id = InstrumentId::Create(pair);
-    if (!inst_id.Valid()) continue;
+    if (!inst_id.Valid())
+      continue;
     auto *base_info = GetBaseInfo(inst_id);
     auto IC_tmp = data::InstrumentComponent{inst_id, base_info, ""};
     InstData_.IM.Insert(IC_tmp);
@@ -250,7 +251,6 @@ void TakingDemo::do_calculations(int64_t current_ts) {
   if (scheduler_.should_negative(current_ts)) {
     process_negative(current_ts);
     scheduler_.mark_negative(current_ts);
-    return;
   }
   // * 计算fair price
   if (scheduler_.should_fp(current_ts)) {

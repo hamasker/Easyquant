@@ -534,15 +534,27 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
     if (ch.empty() || !data.contains("data") || !data["data"].is_array()) return;
     const auto &items = data["data"];
 
+    // 通用 symbol 匹配 (v2 "BTC/USD" vs v1 "XBT/USD" 等格式)
+    auto find_inst = [&](const std::string &sym) {
+      // 直接匹配
+      auto it = symbol_to_inst_.find(sym);
+      if (it != symbol_to_inst_.end()) return it;
+      // 去斜杠小写匹配
+      std::string flat = sym;
+      flat.erase(std::remove(flat.begin(), flat.end(), '/'), flat.end());
+      std::transform(flat.begin(), flat.end(), flat.begin(), ::tolower);
+      for (auto &[k, v] : symbol_to_inst_) {
+        std::string kl = k;
+        kl.erase(std::remove(kl.begin(), kl.end(), '/'), kl.end());
+        std::transform(kl.begin(), kl.end(), kl.begin(), ::tolower);
+        if (kl == flat) return symbol_to_inst_.find(k);
+      }
+      return symbol_to_inst_.end();
+    };
+
     if (ch == "trade") {
       for (auto &d : items) {
-        // symbol 格式 "BTC/USD", v2 用 BTC 而非 XBT
-        std::string sym = d.value("symbol", "");
-        if (!sym.empty()) {
-          size_t p = sym.find("XBT");
-          if (p != std::string::npos) sym.replace(p, 3, "BTC");
-        }
-        auto it = symbol_to_inst_.find(sym);
+        auto it = find_inst(d.value("symbol", ""));
         if (it == symbol_to_inst_.end()) continue;
         if (!d.contains("trades") || !d["trades"].is_array()) continue;
         for (auto &t : d["trades"]) {
@@ -564,7 +576,7 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
 
     if (ch == "ticker") {
       for (auto &d : items) {
-        auto it = symbol_to_inst_.find(d.value("symbol", ""));
+        auto it = find_inst(d.value("symbol", ""));
         if (it == symbol_to_inst_.end()) continue;
         NovaCoinBBO bbo{};
         bbo.instrument_id = it->second;
@@ -580,7 +592,7 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
 
     if (ch == "book") {
       for (auto &d : items) {
-        auto it = symbol_to_inst_.find(d.value("symbol", ""));
+        auto it = find_inst(d.value("symbol", ""));
         if (it == symbol_to_inst_.end()) continue;
         NovaCoinDepth depth{};
         depth.instrument_id = it->second;
