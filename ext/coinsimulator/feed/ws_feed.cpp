@@ -232,6 +232,12 @@ public:
       auto data = nlohmann::json::parse(std::string_view(msg, len));
       feed_.ProcessRawMessage(exchange_, data);
     } catch (const std::exception &ex) {
+      static int krk_parse_err = 0;
+      if (exchange_ == "krk" || exchange_ == "kraken") {
+        if (++krk_parse_err <= 5)
+          fprintf(stderr, "[KRK_RAW] len=%zu first_byte=0x%02x data=%.50s\n",
+                  len, (unsigned char)msg[0], msg);
+      }
       ERROR_FLOG("[WSFeed] {} parse error: {}", exchange_, ex.what());
     }
   }
