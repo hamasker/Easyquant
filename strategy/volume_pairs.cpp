@@ -4,7 +4,6 @@
 #include <cstdio>
 #include <functional>
 #include <regex>
-#include <unordered_set>
 #include <utility>
 
 #include "nlohmann_json/json.hpp"
@@ -58,38 +57,6 @@ static const VolumeSource kVolumeSources[] = {
          return {"", 0};
        return {pair, std::stod(d.value("quote_volume", "0"))};
      }},
-    {"Coinbase", "cb",
-     "curl -s --max-time 5 "
-     "'https://api.exchange.coinbase.com/products/volume-summary' "
-     "2>/dev/null",
-     [](const nlohmann::json &d) -> std::pair<std::string, double> {
-       // d = {"id":"BTC-USD","base_currency":"BTC","quote_currency":"USD",...}
-       double vol = 0.0;
-       if (d.contains("spot_volume_24hour")) {
-         auto &v = d["spot_volume_24hour"];
-         if (v.is_string()) {
-           std::string vs = v.get<std::string>();
-           if (!vs.empty()) vol = std::stod(vs);
-         } else if (v.is_number()) vol = v.get<double>();
-       }
-       if (vol <= 0) return {"", 0};
-       std::string base = d.value("base_currency", "");
-       std::string quote = d.value("quote_currency", "");
-       // 只取主流币 (Coinbase 按数量排, 土狗币基数大但不值钱)
-       static const std::unordered_set<std::string> majors = {
-         "BTC","ETH","SOL","XRP","USDT","USDC","LINK","MATIC","UNI","AAVE",
-         "ATOM","DOT","LTC","BCH","AVAX","NEAR","FIL","ARB","OP","SUI",
-         "APT","PEPE","SHIB","DOGE","WIF","BONK","FLOKI"};
-       std::string base_up = base;
-       std::transform(base_up.begin(), base_up.end(), base_up.begin(), ::toupper);
-       if (!majors.count(base_up)) return {"", 0};
-       // 只取 USD/USDT/EUR/GBP quote
-       std::string quote_up = quote;
-       std::transform(quote_up.begin(), quote_up.end(), quote_up.begin(), ::toupper);
-       if (quote_up != "USD" && quote_up != "USDT" && quote_up != "EUR" && quote_up != "GBP")
-         return {"", 0};
-       return {base + "_" + quote, vol};
-     }},
 };
 
 std::string http_get(const char *shell_cmd) {
@@ -121,15 +88,6 @@ std::vector<std::string> fetch_top_n(const VolumeSource &src, int n) {
     if (data.is_object() && data.contains("data") && data["data"].is_array())
       arr = &data["data"];
     if (!arr->is_array()) return result;
-
-    // Coinbase 嵌套数组展平: [[{...},{...}],[{...}]] → [{...},{...},{...}]
-    nlohmann::json flat = nlohmann::json::array();
-    if (!arr->empty() && (*arr)[0].is_array()) {
-      for (auto &group : *arr)
-        for (auto &item : group)
-          flat.push_back(item);
-      arr = &flat;
-    }
 
     std::vector<std::pair<std::string, double>> ranked;
     for (auto &d : *arr) {
