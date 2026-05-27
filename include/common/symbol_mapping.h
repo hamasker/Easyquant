@@ -116,9 +116,10 @@ inline std::string normalize(const std::string &sym) {
   s.erase(std::remove(s.begin(), s.end(), '-'), s.end());
   s.erase(std::remove(s.begin(), s.end(), '_'), s.end());
   std::transform(s.begin(), s.end(), s.begin(), ::tolower);
-  // XBT ↔ BTC 互转
-  size_t p = s.find("xbt");
-  if (p != std::string::npos) s.replace(p, 3, "btc");
+  // XBT ↔ BTC 互转 (while 循环处理 XXBTZ 等双前缀)
+  size_t p;
+  while ((p = s.find("xbt")) != std::string::npos)
+    s.replace(p, 3, "btc");
   return s;
 }
 

@@ -14,6 +14,7 @@
 #include <sstream>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility> // std::pair
 #include <vector>
 
@@ -144,7 +145,7 @@ void Print(const T &first, const Args &...rest) {
   }
 }
 
-// 通用容器转字符串函数（支持 vector, array, list, set 等）
+// 通用容器转字符串函数（支持 vector, array, list, set, unordered_set 等）
 template <typename Container>
 std::string ToString(const Container &container, int precision = -1) {
   std::ostringstream oss;
@@ -157,6 +158,26 @@ std::string ToString(const Container &container, int precision = -1) {
     if (!first)
       oss << ", ";
     oss << elem;
+    first = false;
+  }
+  oss << " }";
+  return oss.str();
+}
+
+// unordered_set<string>: 排序后输出，带引号，便于日志对比
+inline std::string ToString(const std::unordered_set<std::string> &container,
+                            int precision = -1) {
+  (void)precision;
+  std::vector<std::string> sorted(container.begin(), container.end());
+  std::sort(sorted.begin(), sorted.end());
+
+  std::ostringstream oss;
+  oss << "{ ";
+  bool first = true;
+  for (const auto &elem : sorted) {
+    if (!first)
+      oss << ", ";
+    oss << "\"" << elem << "\"";
     first = false;
   }
   oss << " }";

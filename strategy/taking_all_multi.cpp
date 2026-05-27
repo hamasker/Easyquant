@@ -70,8 +70,13 @@ bool TakingDemo::on_init(const Config *cfg) {
 
   // ── turnover 订阅: 先收策略标的, 再补 top-N 缺口 ──
   // 1. 策略已订阅的 spot (含 trade 频道)
-  for (auto &item : InstData_.trade_map)
-    turnover_pairs_.add_id(item.first);
+  for (auto &item : InstData_.trade_map) {
+    const auto *IC = InstData_.IM.FindByUniId(item.first);
+    if (IC)
+      turnover_pairs_.add_id(item.first, IC->inst_str);
+    else
+      turnover_pairs_.add_id(item.first);
+  }
 
   // 2. top-N 中未订阅的补上 (只订 trade)
   for (auto &pair : turnover_pairs_.filter_new(fetch_all_top_pairs(20))) {
@@ -85,9 +90,11 @@ bool TakingDemo::on_init(const Config *cfg) {
     ChangePositionToSingleSide(posi);
     InstData_.trade_map[IC_tmp.uni_id] = data::trades_data{};
     subs.emplace_back(SubTopic{posi, NOVA_COIN_QUOTE_TRADE, true});
-    turnover_pairs_.add_id(IC_tmp.uni_id);
+    turnover_pairs_.add_id(IC_tmp.uni_id, pair);
   }
   INFO_FLOG("[OnInit] turnover subs: {}", turnover_pairs_.size());
+  INFO_FLOG("[OnInit] turnover subs: {}",
+            sum_util::ToString(turnover_pairs_.subscribed_str));
   /*
   ! Initialize Variables
   */
@@ -203,6 +210,7 @@ void TakingDemo::on_datainfo(const DataInfoManager *datainfo, int32_t di,
   } else if (quote_type == NOVA_COIN_QUOTE_TRADE) {
     const auto *trade = static_cast<const Trade *>(one.buffer().back());
     global_ts = trade->local_time;
+    INFO_FLOG("[OnDatainfo] trade_symbol: {}", trade->instrument_id.symbol);
     // turnover 累加 (O(1) 集合判断)
     auto t_it = InstData_.IM.inststr2id_.find(trade->instrument_id.symbol);
     if (t_it != InstData_.IM.inststr2id_.end() &&

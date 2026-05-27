@@ -23,7 +23,11 @@ struct TurnoverPairManager {
     return out;
   }
 
-  void add_id(UniInstID id) { ids.insert(id); }
+  void add_id(UniInstID id, const std::string &inst_str = "") {
+    ids.insert(id);
+    if (!inst_str.empty())
+      subscribed_str.insert(inst_str);
+  }
   bool contains(UniInstID id) const { return ids.find(id) != ids.end(); }
   size_t size() const { return ids.size(); }
 };
