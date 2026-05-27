@@ -591,25 +591,40 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
       for (auto &d : items) {
         auto it = find_inst(d.value("symbol", ""));
         if (it == symbol_to_inst_.end()) continue;
-        NovaCoinDepthLVN depth{};  // Kraken 用 DEPTH_LVN (100档)
+        std::string type = data.value("type", "");
+        auto &[bids, asks] = local_book_[it->first];
+        bool is_snap = (type == "snapshot");
+        if (is_snap) { bids.clear(); asks.clear(); }
+        auto apply = [&](const nlohmann::json &arr, bool is_bid) {
+          for (auto &lv : arr) {
+            if (!lv.is_object()) continue;
+            double px = lv["price"].is_number() ? lv["price"].get<double>() : std::stod(lv["price"].get<std::string>());
+            double qty = lv["qty"].is_number() ? lv["qty"].get<double>() : std::stod(lv["qty"].get<std::string>());
+            if (qty <= 0) { if (is_bid) bids.erase(px); else asks.erase(px); }
+            else { if (is_bid) bids[px] = qty; else asks[px] = qty; }
+          }
+        };
+        if (d.contains("bids")) apply(d["bids"], true);
+        if (d.contains("asks")) apply(d["asks"], false);
+        // 合成全档 DEPTH_LVN
+        NovaCoinDepthLVN depth{};
         depth.instrument_id = it->second;
         depth.local_ns = local_ns;
         depth.local_time = local_ns;
-        auto fill = [&](const std::string &side, const nlohmann::json &arr) {
-          int i = 0;
-          for (auto &lv : arr) {
-            if (i >= NovaCoinDepthLVN::MAX_PRICE_LEVEL || !lv.is_object()) break;
-            double px = lv["price"].is_number() ? lv["price"].get<double>() : std::stod(lv["price"].get<std::string>());
-            double qty = lv["qty"].is_number() ? lv["qty"].get<double>() : std::stod(lv["qty"].get<std::string>());
-            if (side == "bid") { depth.bid[i].price = px; depth.bid[i].qty = qty; }
-            else { depth.ask[i].price = px; depth.ask[i].qty = qty; }
-            ++i;
-          }
-          depth.ob_level = static_cast<uint16_t>(std::max((int)depth.ob_level, i));
-        };
-        if (d.contains("bids")) fill("bid", d["bids"]);
-        if (d.contains("asks")) fill("ask", d["asks"]);
-        dispatch(NOVA_COIN_QUOTE_DEPTH_LVN, &depth, sizeof(depth));
+        int i = 0;
+        for (auto &[px, qty] : bids) {
+          if (i >= NovaCoinDepthLVN::MAX_PRICE_LEVEL) break;
+          depth.bid[i].price = px; depth.bid[i].qty = qty; ++i;
+        }
+        depth.ob_level = static_cast<uint16_t>(i);
+        i = 0;
+        for (auto &[px, qty] : asks) {
+          if (i >= NovaCoinDepthLVN::MAX_PRICE_LEVEL) break;
+          depth.ask[i].price = px; depth.ask[i].qty = qty; ++i;
+        }
+        depth.ob_level = static_cast<uint16_t>(std::max((int)depth.ob_level, i));
+        if (!bids.empty() && !asks.empty())
+          dispatch(NOVA_COIN_QUOTE_DEPTH_LVN, &depth, sizeof(depth));
       }
       return;
     }
