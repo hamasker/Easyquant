@@ -66,8 +66,10 @@ static const VolumeSource kVolumeSources[] = {
        double vol = 0.0;
        if (d.contains("spot_volume_24hour")) {
          auto &v = d["spot_volume_24hour"];
-         if (v.is_string()) vol = std::stod(v.get<std::string>());
-         else if (v.is_number()) vol = v.get<double>();
+         if (v.is_string()) {
+           std::string vs = v.get<std::string>();
+           if (!vs.empty()) vol = std::stod(vs);
+         } else if (v.is_number()) vol = v.get<double>();
        }
        if (vol <= 0) return {"", 0};
        std::string base = d.value("base_currency", "");
