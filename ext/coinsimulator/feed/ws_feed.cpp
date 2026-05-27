@@ -898,10 +898,6 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
       return;
     }
     if (ch == "trades") {
-      static int ok_tr_cnt = 0;
-      if (++ok_tr_cnt <= 5)
-        fprintf(stderr, "[OKX_TRADE] inst=%s items=%zu\n",
-                inst_id.Valid() ? inst_id.symbol.c_str() : "INVALID", items.size());
       for (auto &t : items) {
         if (!t.is_object()) continue;
         NovaCoinTrade trade{};
