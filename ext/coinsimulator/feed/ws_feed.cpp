@@ -282,7 +282,7 @@ MapChannels(const std::string &exchange,
     } else if (exchange == "coinbase" || exchange == "cb") {
       if (ch == "bbo") out.push_back("level2");
       else if (ch == "depth") out.push_back("level2");
-      else if (ch == "trade") out.push_back("ticker");
+      else if (ch == "trade") out.push_back("market_trades");  // 需认证, 公开 WS 可能不推送
       else out.push_back(ch);
     } else if (exchange == "gateio" || exchange == "gt") {
       // 新 JSON-RPC: bbo → depth(limit=1), trade → trades
@@ -540,21 +540,7 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
     return;
   }
 
-  // Coinbase ticker/market_trades: 先捕获所有 CB 消息看 channel 名
-  if ((exchange == "cb" || exchange == "coinbase") && data.is_object()) {
-    std::string ch = data.value("channel", "");
-    static int cb_tmp = 0;
-    if (++cb_tmp <= 30 && ch != "l2_data" && ch != "subscriptions")
-      fprintf(stderr, "[CB_MSG] ch=%s keys=", ch.c_str());
-    if (ch != "" && ch != "l2_data" && ch != "subscriptions" && cb_tmp <= 30) {
-      for (auto &[k, _] : data.items())
-        if (k != "channel" && k != "client_id" && k != "timestamp" && k != "sequence_num")
-          fprintf(stderr, "%s ", k.c_str());
-      fprintf(stderr, "\n");
-    }
-  }
-
-  // Coinbase ticker: {"channel":"ticker","events":[{"tickers":[...]}]}
+  // Coinbase ticker/market_trades (公开 WS 可能不推送, 见 MapChannels 中的 cb "trade" 映射) {"channel":"ticker","events":[{"tickers":[...]}]}
   if ((exchange == "cb" || exchange == "coinbase") &&
       data.value("channel", "") == "ticker" &&
       data.contains("events") && data["events"].is_array()) {
