@@ -846,10 +846,14 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
     }
   }
 
-  // OKX 格式
+  // OKX / Gate.io 格式
   if (data.contains("arg") && data.contains("data") && data["data"].is_array()) {
     const auto &arg = data["arg"];
     std::string ch = arg.value("channel", "");
+    static int ok_gt_cnt = 0;
+    if (++ok_gt_cnt <= 10)
+      fprintf(stderr, "[ARG_CH] ex=%s ch=%s items=%zu\n",
+              exchange.c_str(), ch.c_str(), data["data"].size());
     const auto &items = data["data"];
     if (items.empty()) return;
 
