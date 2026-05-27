@@ -57,6 +57,24 @@ static const VolumeSource kVolumeSources[] = {
          return {"", 0};
        return {pair, std::stod(d.value("quote_volume", "0"))};
      }},
+    {"Coinbase", "cb",
+     "curl -s --max-time 5 "
+     "'https://api.exchange.coinbase.com/products/volume-summary' "
+     "2>/dev/null",
+     [](const nlohmann::json &d) -> std::pair<std::string, double> {
+       // d = {"id":"BTC-USD","base_currency":"BTC","quote_currency":"USD",...}
+       double vol = 0.0;
+       if (d.contains("spot_volume_24hour")) {
+         auto &v = d["spot_volume_24hour"];
+         if (v.is_string()) vol = std::stod(v.get<std::string>());
+         else if (v.is_number()) vol = v.get<double>();
+       }
+       if (vol <= 0) return {"", 0};
+       std::string base = d.value("base_currency", "");
+       std::string quote = d.value("quote_currency", "");
+       if (base.empty() || quote.empty()) return {"", 0};
+       return {base + "_" + quote, vol};
+     }},
 };
 
 std::string http_get(const char *shell_cmd) {
@@ -88,6 +106,15 @@ std::vector<std::string> fetch_top_n(const VolumeSource &src, int n) {
     if (data.is_object() && data.contains("data") && data["data"].is_array())
       arr = &data["data"];
     if (!arr->is_array()) return result;
+
+    // Coinbase 嵌套数组展平: [[{...},{...}],[{...}]] → [{...},{...},{...}]
+    nlohmann::json flat = nlohmann::json::array();
+    if (!arr->empty() && (*arr)[0].is_array()) {
+      for (auto &group : *arr)
+        for (auto &item : group)
+          flat.push_back(item);
+      arr = &flat;
+    }
 
     std::vector<std::pair<std::string, double>> ranked;
     for (auto &d : *arr) {
@@ -147,7 +174,7 @@ std::vector<std::string> fetch_all_top_pairs(int per_exch) {
           }
         }
       }
-      all.push_back(lower + "_spot." + src.exch_abbr);
+      all.push_back(lower + "." + src.exch_abbr);
     }
   }
   return all;

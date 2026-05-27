@@ -79,7 +79,9 @@ bool TakingDemo::on_init(const Config *cfg) {
   }
 
   // 2. top-N 中未订阅的补上 (只订 trade)
-  for (auto &pair : turnover_pairs_.filter_new(fetch_all_top_pairs(20))) {
+  auto top_pairs = fetch_all_top_pairs(20);
+  INFO_FLOG("[OnInit] fetch_all_top_pairs: {}", sum_util::ToString(top_pairs));
+  for (auto &pair : turnover_pairs_.filter_new(top_pairs)) {
     auto inst_id = InstrumentId::Create(pair);
     if (!inst_id.Valid())
       continue;
@@ -671,13 +673,19 @@ void TakingDemo::subscribe_instruments(std::string inst_str, bool sub_spot) {
     if (DataProcess::is_main_exchange(inst_str, "bn"))
       InstData_.swap_order_map.emplace(IC->uni_id,
                                        data::OrderManager{inst_id, posi});
+    InstData_.bbo_map[IC->uni_id] = data::bbo_data();
+    subs.emplace_back(SubTopic{posi, NOVA_COIN_QUOTE_BBO, true});
+    INFO_FLOG("[SubInst]{} {} subscribed BBO (id: {})", type_str, inst_str,
+              IC->uni_id);
+    return;
   }
   // ! 4. Init components for aim/other exchanges
-  // * initilize trade_map / depth_map
+  // * initilize trade_map
   InstData_.trade_map[IC_tmp.uni_id] = data::trades_data{};
   subs.emplace_back(SubTopic{posi, NOVA_COIN_QUOTE_TRADE, true});
   INFO_FLOG("[SubInst]{} {} subscribed Trade (id: {})", type_str, inst_str,
             IC->uni_id);
+  // * initilize depth_map
   NOVA_COIN_QUOTE_TYPE depth_type =
       (sum_util::EndsWith(inst_str, CFG_.Strategy.Stable.aim_exchange))
           ? NOVA_COIN_QUOTE_DEPTH_LVN
