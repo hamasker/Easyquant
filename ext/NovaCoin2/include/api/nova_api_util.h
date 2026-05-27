@@ -176,12 +176,12 @@ public:
   static constexpr auto CONFIG_BASE_INFO_PATH = "BaseInfo.base_info_path";
   static constexpr auto CONFIG_BASE_INFO_DIR = "BaseInfo.base_info_dir";
 
-  bool LoadBaseInfo(int32_t day) {
-    day = 1;
+  bool LoadBaseInfo(int32_t /*day*/) {
+    // day = 1;
     return false;
   } // todo
-  bool LoadBaseInfo(const Config *cfg) {
-    cfg = nullptr;
+  bool LoadBaseInfo(const Config /*cfg*/) {
+    // cfg = nullptr;
     return false;
   } // todo
   bool LoadBaseInfo(const std::string &path, const std::string &dir = "") {
@@ -190,9 +190,9 @@ public:
   } // todo
 
 private:
-  static bool _LoadBaseInfo(MapT *mgr, const char *base_info_file_path) {
-    mgr = nullptr;
-    base_info_file_path = nullptr;
+  static bool _LoadBaseInfo(MapT /*mgr*/, const char /*base_info_file_path*/) {
+    // mgr = nullptr;
+    // base_info_file_path = nullptr;
     return false;
   } // todo
 };

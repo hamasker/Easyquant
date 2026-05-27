@@ -27,13 +27,13 @@ struct Level {
 // 对于双腿路径：使用 price_func 和 qty_func 来计算合成价格和数量
 // 模板参数避免 std::function 堆分配和虚函数调用开销
 template <typename PriceFn, typename QtyFn>
-inline void append_path_levels(
-    const data::depths_data &leg1, std::size_t depth1,
-    const data::depths_data *leg2, std::size_t depth2, std::vector<Level> &bids,
-    std::vector<Level> &asks,
-    PriceFn price_func, QtyFn qty_func,
-    bool leg1_bid_use_bids, bool leg1_ask_use_bids,
-    bool leg2_bid_use_bids, bool leg2_ask_use_bids) {
+inline void
+append_path_levels(const data::depths_data &leg1, std::size_t depth1,
+                   const data::depths_data *leg2, std::size_t depth2,
+                   std::vector<Level> &bids, std::vector<Level> &asks,
+                   PriceFn price_func, QtyFn qty_func, bool leg1_bid_use_bids,
+                   bool leg1_ask_use_bids, bool leg2_bid_use_bids,
+                   bool leg2_ask_use_bids) {
 
   // bid 方向（市场买 USDT，我们卖 USDT）
   const auto &leg1_bid_side = leg1_bid_use_bids ? leg1.bids : leg1.asks;
@@ -518,13 +518,18 @@ static int check_path_consistency(double d_mid, double e_mid, double u_mid) {
 
 void FairPriceGenerator::calculate_fp_usdt() {
   // 1. 提取 5 个 depth pair
-  const auto &id_d  = id_map.at(DataProcess::format_main_exchange_usd_pair("usdt", CFG_.aim_exchange));
-  const auto &id_te = id_map.at(DataProcess::format_main_exchange_cross_pair("usdt", "eur", CFG_.aim_exchange));
-  const auto &id_eu = id_map.at(DataProcess::format_main_exchange_usd_pair("eur", CFG_.aim_exchange));
-  const auto &id_ct = id_map.at(DataProcess::format_main_exchange_cross_pair("usdc", "usdt", CFG_.aim_exchange));
-  const auto &id_cu = id_map.at(DataProcess::format_main_exchange_usd_pair("usdc", CFG_.aim_exchange));
+  const auto &id_d = id_map.at(
+      DataProcess::format_main_exchange_usd_pair("usdt", CFG_.aim_exchange));
+  const auto &id_te = id_map.at(DataProcess::format_main_exchange_cross_pair(
+      "usdt", "eur", CFG_.aim_exchange));
+  const auto &id_eu = id_map.at(
+      DataProcess::format_main_exchange_usd_pair("eur", CFG_.aim_exchange));
+  const auto &id_ct = id_map.at(DataProcess::format_main_exchange_cross_pair(
+      "usdc", "usdt", CFG_.aim_exchange));
+  const auto &id_cu = id_map.at(
+      DataProcess::format_main_exchange_usd_pair("usdc", CFG_.aim_exchange));
 
-  const auto &dd  = depth_map.at(id_d);
+  const auto &dd = depth_map.at(id_d);
   const auto &dte = depth_map.at(id_te);
   const auto &deu = depth_map.at(id_eu);
   const auto &dct = depth_map.at(id_ct);
@@ -532,8 +537,11 @@ void FairPriceGenerator::calculate_fp_usdt() {
 
   // 数据时效检查
   InstData_.abnormal_status = data::abnormal_status::NORMAL;
-  auto stale = [&](const auto &d) { return !d.valid || ts_tmp - d.local_ts > NS_5S; };
-  if (stale(dd) || stale(dte) || stale(deu) || stale(dct) || stale(dcu)) [[unlikely]] {
+  auto stale = [&](const auto &d) {
+    return !d.valid || ts_tmp - d.local_ts > NS_5S;
+  };
+  if (stale(dd) || stale(dte) || stale(deu) || stale(dct) || stale(dcu))
+      [[unlikely]] {
     ERROR_FLOG("abnormal usdt fp: stale depth");
     InstData_.abnormal_status = data::abnormal_status::AIM_EXCH_INVALID;
     return;
@@ -543,25 +551,32 @@ void FairPriceGenerator::calculate_fp_usdt() {
   auto mid = [](double b1, double a1, double b2, double a2, auto fn) {
     return (fn(b1, b2) + fn(a1, a2)) * 0.5;
   };
-  double d_mid = mid(dd.bids[0][0], dd.asks[0][0], 0, 0, [](double p, double) { return p; });
-  double e_mid = mid(dte.bids[0][0], dte.asks[0][0], deu.bids[0][0], deu.asks[0][0],
-                     [](double a, double b) { return a * b; });
-  double u_mid = mid(dct.bids[0][0], dct.asks[0][0], dcu.bids[0][0], dcu.asks[0][0],
-                     [](double a, double b) { return b / a; });
+  double d_mid = mid(dd.bids[0][0], dd.asks[0][0], 0, 0,
+                     [](double p, double) { return p; });
+  double e_mid = mid(dte.bids[0][0], dte.asks[0][0], deu.bids[0][0],
+                     deu.asks[0][0], [](double a, double b) { return a * b; });
+  double u_mid = mid(dct.bids[0][0], dct.asks[0][0], dcu.bids[0][0],
+                     dcu.asks[0][0], [](double a, double b) { return b / a; });
 
   int mask = check_path_consistency(d_mid, e_mid, u_mid);
   if (mask == 0) [[unlikely]] {
-    ERROR_FLOG("abnormal usdt fp: all 3 paths diverged d={:.6f} e={:.6f} u={:.6f}", d_mid, e_mid, u_mid);
+    ERROR_FLOG(
+        "abnormal usdt fp: all 3 paths diverged d={:.6f} e={:.6f} u={:.6f}",
+        d_mid, e_mid, u_mid);
     InstData_.abnormal_status = data::abnormal_status::AIM_EXCH_INVALID;
     return;
   }
 
   // 3. 只构造通过检测的路径 Levels
   std::vector<Level> bids, asks;
-  bids.reserve(128); asks.reserve(128);
-  if (mask & 1) append_direct_usdtusd_levels(dd, DepNum10, bids, asks);
-  if (mask & 2) append_eur_path_levels(dte, deu, DepNum10, DepNum5, bids, asks);
-  if (mask & 4) append_usdc_path_levels(dct, dcu, DepNum10, DepNum5, bids, asks);
+  bids.reserve(128);
+  asks.reserve(128);
+  if (mask & 1)
+    append_direct_usdtusd_levels(dd, DepNum10, bids, asks);
+  if (mask & 2)
+    append_eur_path_levels(dte, deu, DepNum10, DepNum5, bids, asks);
+  if (mask & 4)
+    append_usdc_path_levels(dct, dcu, DepNum10, DepNum5, bids, asks);
 
   if (bids.empty() || asks.empty()) [[unlikely]] {
     ERROR_FLOG("abnormal usdt fp: empty levels mask={}", mask);
@@ -807,8 +822,8 @@ void FairPriceGenerator::calculate_fp_usdc() {
   // 检查外部数据有效性并设置异常状态
   const bool external_bn_valid = is_external_data_valid(
       bbo_bn_usdcusdt, depth_bn_usdcusdt, this->ts_tmp, NS_5S);
-  const bool external_cb_valid =
-      is_external_data_valid(bbo_cb_usdtusd, depth_cb_usdtusd, this->ts_tmp, NS_5S);
+  const bool external_cb_valid = is_external_data_valid(
+      bbo_cb_usdtusd, depth_cb_usdtusd, this->ts_tmp, NS_5S);
 
   if (!external_bn_valid || !external_cb_valid) {
     WARNING_FLOG("abnormal usdc fp calculation: invalid external data! "
@@ -897,7 +912,8 @@ void FairPriceGenerator::calculate_fp_usdc() {
   double mid = (fp[0] + fp[1]) * 0.5;
   double dev_bp = std::abs(mid - 1.0) * 10000.0;
   if (dev_bp > kUsdcHardBps) [[unlikely]] {
-    ERROR_FLOG("usdc depeg: mid={:.6f} dev={:.1f}bp, capping to ±{}bp", mid, dev_bp, kUsdcHardBps);
+    ERROR_FLOG("usdc depeg: mid={:.6f} dev={:.1f}bp, capping to ±{}bp", mid,
+               dev_bp, kUsdcHardBps);
     fp[0] = std::max(fp[0], 1.0 - kUsdcHardBps / 10000.0);
     fp[1] = std::min(fp[1], 1.0 + kUsdcHardBps / 10000.0);
   } else if (dev_bp > kUsdcWarnBps) {
@@ -987,9 +1003,9 @@ void FairPriceGenerator::calculate_fp_forex(const data::currency &currency) {
                             currency_str, CFG_.aim_exchange)) {
       fps_map_[currency].timestamps.add(this->ts_tmp);
       if (CFG_.flag_ib) { // todo
-        const auto &id_ib =
-            id_map.at(fmt::format("{}_usd_cash.idealpro", currency_str));
-        auto &ib_data = bbo_map.at(id_ib);
+        // const auto &id_ib =
+        //     id_map.at(fmt::format("{}_usd_cash.idealpro", currency_str));
+        // auto &ib_data = bbo_map.at(id_ib);
         // fp_forex_IB stubbed — fp stays unchanged
       }
       fps_map_[currency].fps.add(fp);
@@ -1185,14 +1201,14 @@ void FairPriceGenerator::calculate_fp_digital(const data::currency &currency) {
             const std::string inst_str =
                 DataProcess::format_main_exchange_usd_pair(currency_str,
                                                            CFG_.aim_exchange);
-            const auto tfi_bn =
-                get_tfi_from_map(InstData_.trade_map, id_bn_Cusdt, this->ts_tmp);
-            const auto tfi_ok =
-                get_tfi_from_map(InstData_.trade_map, id_ok_Cusdt, this->ts_tmp);
+            const auto tfi_bn = get_tfi_from_map(InstData_.trade_map,
+                                                 id_bn_Cusdt, this->ts_tmp);
+            const auto tfi_ok = get_tfi_from_map(InstData_.trade_map,
+                                                 id_ok_Cusdt, this->ts_tmp);
             const auto tfi_cb =
                 get_tfi_from_map(InstData_.trade_map, id_cb_Cusd, this->ts_tmp);
-            const auto tfi_aim =
-                get_tfi_from_map(InstData_.trade_map, id_aim_Cusd, this->ts_tmp);
+            const auto tfi_aim = get_tfi_from_map(InstData_.trade_map,
+                                                  id_aim_Cusd, this->ts_tmp);
             DEBUG_FLOG("[TFI][apply] inst={} k={} bn={} ok={} cb={} aim={} "
                        "s_bps={:.4f} "
                        "factor={:.8f}",

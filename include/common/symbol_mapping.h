@@ -36,9 +36,9 @@ inline const std::unordered_map<std::string, std::string>& kraken_x_map() {
     {"eigen", "EIGEN"}, {"pendle", "PENDLE"}, {"axs", "AXS"},
     {"sand", "SAND"},  {"mana", "MANA"},  {"chz", "CHZ"},
     {"bch", "BCH"},    {"bsv", "BSV"},
-    // Stablecoins & Fiat (不加前缀, 独立映射)
-    {"usd", "ZUSD"},   {"eur", "ZEUR"},   {"gbp", "ZGBP"},
-    {"aud", "ZAUD"},   {"cad", "ZCAD"},   {"chf", "ZCHF"},
+    // Stablecoins & Fiat (WS v2 用标准名, 不加 Z 前缀)
+    {"usd", "USD"},    {"eur", "EUR"},    {"gbp", "GBP"},
+    {"aud", "AUD"},    {"cad", "CAD"},    {"chf", "CHF"},
     {"usdt", "USDT"},  {"usdc", "USDC"},  {"dai", "DAI"},
     {"paxg", "PAXG"},  {"paxgold", "PAXG"},
     {"eurc", "EURC"},  {"pyusd", "PYUSD"},
