@@ -540,6 +540,20 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
     return;
   }
 
+  // Coinbase ticker/market_trades: 先捕获所有 CB 消息看 channel 名
+  if ((exchange == "cb" || exchange == "coinbase") && data.is_object()) {
+    std::string ch = data.value("channel", "");
+    static int cb_tmp = 0;
+    if (++cb_tmp <= 30 && ch != "l2_data" && ch != "subscriptions")
+      fprintf(stderr, "[CB_MSG] ch=%s keys=", ch.c_str());
+    if (ch != "" && ch != "l2_data" && ch != "subscriptions" && cb_tmp <= 30) {
+      for (auto &[k, _] : data.items())
+        if (k != "channel" && k != "client_id" && k != "timestamp" && k != "sequence_num")
+          fprintf(stderr, "%s ", k.c_str());
+      fprintf(stderr, "\n");
+    }
+  }
+
   // Coinbase ticker: {"channel":"ticker","events":[{"tickers":[...]}]}
   if ((exchange == "cb" || exchange == "coinbase") &&
       data.value("channel", "") == "ticker" &&
