@@ -532,10 +532,24 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
     if (data.contains("method") || data.contains("success")) return;
     std::string ch = data.value("channel", "");
     if (ch.empty() || !data.contains("data") || !data["data"].is_array()) return;
+    static int _v2_keys = 0;
+    if (++_v2_keys == 1) {
+      fprintf(stderr, "[V2_KEYS] symbol_to_inst_ sample: ");
+      int n = 0;
+      for (auto &[k, _] : symbol_to_inst_) {
+        if (n++ >= 10) break;
+        fprintf(stderr, "%s ", k.c_str());
+      }
+      fprintf(stderr, "\n");
+    }
     const auto &items = data["data"];
 
-    // 通用 symbol 匹配 (v2 "BTC/USD" ↔ v1 "XBT/USD" 等格式)
-    auto find_inst = [&](const std::string &sym) {
+    // 通用 symbol 匹配
+    static int _find_dbg = 0;
+    auto find_inst = [&](const std::string &sym) -> decltype(symbol_to_inst_.begin()) {
+      if (++_find_dbg <= 5)
+        fprintf(stderr, "[V2_FIND] looking for '%s', map_size=%zu\n",
+                sym.c_str(), symbol_to_inst_.size());
       auto it = symbol_to_inst_.find(sym);
       if (it != symbol_to_inst_.end()) return it;
       // 去斜杠小写, XBT↔BTC
