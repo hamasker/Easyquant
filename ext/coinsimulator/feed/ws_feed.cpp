@@ -537,6 +537,11 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
               data.contains("data") && data["data"].is_array() ? data["data"].size() : 0);
 
     if (ch.empty() || !data.contains("data") || !data["data"].is_array()) return;
+    static int _v2_dbg2 = 0;
+    if (ch == "status" && ++_v2_dbg2 <= 3) {
+      std::string dump = data.dump();
+      fprintf(stderr, "[V2_STATUS] %s\n", dump.c_str());
+    }
     if (ch.empty() || !data.contains("data") || !data["data"].is_array()) return;
     const auto &items = data["data"];
 
