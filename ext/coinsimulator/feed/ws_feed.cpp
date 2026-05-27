@@ -203,11 +203,16 @@ public:
         }
       }
     }
-    // OKX/Coinbase 文本心跳: "ping" / "pong"
+    // 文本心跳: Kraken v2 / OKX / Coinbase
     if (len <= 4 && msg[0] == 'p') {
       std::string s(msg, len);
       if (s == "ping") { api_->Send("pong", 4); return; }
       if (s == "pong") return;
+    }
+    // Kraken v2 心跳也可能是 "heartbeat"
+    if (exchange_ == "krk" || exchange_ == "kraken") {
+      std::string s(msg, len);
+      if (s == "heartbeat") { api_->Send("heartbeat", 9); return; }
     }
     // Kraken 纯文本心跳
     if (len > 0 && msg[0] == '{' && strncmp(msg, "{\"event\":\"heartbeat\"", 21) == 0)
@@ -427,9 +432,9 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
                                const nlohmann::json &data) {
   if (data.contains("result") && data.contains("id") && !data.contains("e"))
     return;
-  // 跳过 Kraken 订阅确认/状态/心跳消息 (非行情, 无 instrument_id)
+  // 跳过 Kraken v2 订阅确认等
   if ((exchange == "krk" || exchange == "kraken") && data.is_object()) {
-    if (data.contains("event") || data.contains("errorMessage")) return;
+    if (data.contains("method") || data.contains("success")) return;
   }
   // 跳过 Coinbase 订阅确认 / 心跳
   if ((exchange == "cb" || exchange == "coinbase") &&
