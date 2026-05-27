@@ -591,24 +591,25 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
       for (auto &d : items) {
         auto it = find_inst(d.value("symbol", ""));
         if (it == symbol_to_inst_.end()) continue;
-        NovaCoinDepth depth{};
+        NovaCoinDepthLVN depth{};  // Kraken 用 DEPTH_LVN (100档)
         depth.instrument_id = it->second;
         depth.local_ns = local_ns;
+        depth.local_time = local_ns;
         auto fill = [&](const std::string &side, const nlohmann::json &arr) {
           int i = 0;
           for (auto &lv : arr) {
-            if (i >= NovaCoinDepth::MAX_PRICE_LEVEL || !lv.is_object()) break;
+            if (i >= NovaCoinDepthLVN::MAX_PRICE_LEVEL || !lv.is_object()) break;
             double px = lv["price"].is_number() ? lv["price"].get<double>() : std::stod(lv["price"].get<std::string>());
             double qty = lv["qty"].is_number() ? lv["qty"].get<double>() : std::stod(lv["qty"].get<std::string>());
             if (side == "bid") { depth.bid[i].price = px; depth.bid[i].qty = qty; }
             else { depth.ask[i].price = px; depth.ask[i].qty = qty; }
             ++i;
           }
-          if (i > depth.ob_level) depth.ob_level = static_cast<uint16_t>(i);
+          depth.ob_level = static_cast<uint16_t>(std::max((int)depth.ob_level, i));
         };
         if (d.contains("bids")) fill("bid", d["bids"]);
         if (d.contains("asks")) fill("ask", d["asks"]);
-        dispatch(NOVA_COIN_QUOTE_DEPTH, &depth, sizeof(depth));
+        dispatch(NOVA_COIN_QUOTE_DEPTH_LVN, &depth, sizeof(depth));
       }
       return;
     }
