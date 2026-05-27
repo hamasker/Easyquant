@@ -578,30 +578,20 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
     };
 
     if (ch == "trade") {
-      static int _tr = 0;
-      for (auto &d : items) {
-        if (++_tr <= 3) {
-          std::string dump = d.dump();
-          fprintf(stderr, "[V2_TR] keys: ");
-          for (auto &[k,_] : d.items()) fprintf(stderr, "%s ", k.c_str());
-          fprintf(stderr, "| raw=%.300s\n", dump.c_str());
-        }
-        auto it = find_inst(d.value("symbol", ""));
+      for (auto &t : items) {
+        if (!t.is_object()) continue;
+        auto it = find_inst(t.value("symbol", ""));
         if (it == symbol_to_inst_.end()) continue;
-        if (!d.contains("trades") || !d["trades"].is_array()) continue;
-        for (auto &t : d["trades"]) {
-          if (!t.is_object()) continue;
-          NovaCoinTrade tr{};
-          tr.instrument_id = it->second;
-          tr.price = t["price"].is_number() ? t["price"].get<double>()
-                     : std::stod(t["price"].get<std::string>());
-          tr.qty = t["qty"].is_number() ? t["qty"].get<double>()
-                   : std::stod(t["qty"].get<std::string>());
-          tr.side = (t.value("side", "") == "buy") ? NOVA_SIDE_BUY : NOVA_SIDE_SELL;
-          tr.local_time = local_ns;
-          tr.local_ns = local_ns;
-          dispatch(NOVA_COIN_QUOTE_TRADE, &tr, sizeof(tr));
-        }
+        NovaCoinTrade tr{};
+        tr.instrument_id = it->second;
+        tr.price = t["price"].is_number() ? t["price"].get<double>()
+                   : std::stod(t["price"].get<std::string>());
+        tr.qty = t["qty"].is_number() ? t["qty"].get<double>()
+                 : std::stod(t["qty"].get<std::string>());
+        tr.side = (t.value("side", "") == "buy") ? NOVA_SIDE_BUY : NOVA_SIDE_SELL;
+        tr.local_time = local_ns;
+        tr.local_ns = local_ns;
+        dispatch(NOVA_COIN_QUOTE_TRADE, &tr, sizeof(tr));
       }
       return;
     }
