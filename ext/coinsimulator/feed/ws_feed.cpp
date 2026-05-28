@@ -482,6 +482,25 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
   if (!raw_sym.empty() && !symbol_to_inst_.empty()) {
     // 先精确查找
     auto it = symbol_to_inst_.find(raw_sym);
+    if (it == symbol_to_inst_.end()) {
+      // XBT↔BTC 互转尝试 (Kraken v2 BTC pairs)
+      std::string alt = raw_sym;
+      size_t p = alt.find("/BTC");
+      if (p != std::string::npos) { alt.replace(p+1, 3, "XBT"); it = symbol_to_inst_.find(alt); }
+      if (it == symbol_to_inst_.end()) {
+        alt = raw_sym;
+        p = alt.find("/XBT");
+        if (p != std::string::npos) { alt.replace(p+1, 3, "BTC"); it = symbol_to_inst_.find(alt); }
+      }
+      if (it == symbol_to_inst_.end()) {
+        alt = raw_sym;
+        if (alt.compare(0, 3, "BTC") == 0) { alt.replace(0, 3, "XBT"); it = symbol_to_inst_.find(alt); }
+      }
+      if (it == symbol_to_inst_.end()) {
+        alt = raw_sym;
+        if (alt.compare(0, 3, "XBT") == 0) { alt.replace(0, 3, "BTC"); it = symbol_to_inst_.find(alt); }
+      }
+    }
     if (it != symbol_to_inst_.end()) {
       inst_id = it->second;
     } else {
