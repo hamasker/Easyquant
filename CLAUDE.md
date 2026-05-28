@@ -88,15 +88,43 @@ do_calculations(ts):
 - **风控**: FP s_bps>50bps 撤单, dispersion过大跳过, OB过期撤单
 - **turnover**: 5所Top20 USDT pair的trade数据驱动FP触发
 
-## WebSocket 交易所一览
+## WebSocket 频道映射
 
-| 交易所 | WS版本 | URL | trade频道 |
-|--------|:-----:|-----|:---------:|
-| Binance | v1 | stream.binance.com:9443 | `@trade` |
-| Binance swap | v1 | fstream.binance.com | `@trade` |
-| Kraken | **v2** | ws.kraken.com/v2 | `trade` (每笔推送) |
-| OKX | v5 | ws.okx.com:8443/ws/v5/public | `trades` |
-| Coinbase | Exchange | ws-feed.exchange.coinbase.com | `matches` |
+配置用通用名 (`bbo`/`depth`/`trade`)，`MapChannels()` 自动映射为各所原生频道名：
+
+| 交易所 | 配置 channel | qtype | 原生 channel | 说明 |
+|--------|:---------:|-------|-------------|------|
+| Binance (bn) | `bbo` | BBO | `bookTicker` | 实时最优价 |
+| | `depth` | Depth | `depth` | 实时增量 (本地簿合成) |
+| | `trade` | Trade | `trade` | 逐笔成交 |
+| Binance Swap (bn_swap) | `bbo` | BBO | `bookTicker` | |
+| | `depth` | Depth | `depth` | 实时增量 |
+| | `trade` | Trade | `trade` | 逐笔成交 |
+| Kraken (krk) | `bbo` | BBO | `ticker` (v2) | |
+| | `depth` | DepthLVN | `book` (v2) | snapshot+update, 本地簿合成全档 |
+| | `trade` | Trade | `trade` (v2) | 逐笔推送 |
+| OKX (ok) | `bbo` | BBO | `bbo-tbt` | tick 级最优价 |
+| | `depth` | Depth | `books5` | 5档深度 |
+| | `trade` | Trade | `trades` | 逐笔成交 |
+| Coinbase (cb) | `bbo` | BBO | `ticker` | 定期快照 (**`level2` 需 API 认证**) |
+| | `depth` | - | `level2` | **需认证, 不可用** |
+| | `trade` | Trade | `matches` | 逐笔成交 (含 `last_match` 快照) |
+| Gate.io (gt) | `bbo` | BBO | `depth` | limit=1 |
+| | `trade` | Trade | `trades` | |
+| Mexc | `bbo` | BBO | `spot@public.aggre.bookTicker.v3.api.pb@10ms` | protobuf |
+| | `trade` | Trade | `spot@public.aggre.deals.v3.api.pb@10ms` | protobuf |
+
+### 当前启用的频道 (mock_config.json)
+
+| 交易所 | channels | URL |
+|--------|----------|-----|
+| Binance | `bbo`, `trade` | stream.binance.com:9443 |
+| Binance swap | `bbo` | fstream.binance.com |
+| Kraken | `depth`, `trade` | ws.kraken.com/v2 |
+| OKX | `bbo`, `trade` | ws.okx.com:8443/ws/v5/public |
+| Coinbase | `bbo`, `trade` | ws-feed.exchange.coinbase.com |
+| Gate.io | 未启用 | ws.gateio.ws/v4/ws |
+| Mexc | 未启用 | wbs-api.mexc.com/ws |
 
 ## 编解码差异 (本地 vs 东京)
 
