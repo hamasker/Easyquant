@@ -553,14 +553,6 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
 
   // Kraken v2: {"channel":"trade/book/ticker","type":"snapshot/update","data":[...]}
   if ((exchange == "krk" || exchange == "kraken") && data.is_object()) {
-    // DEBUG: 记录所有 v2 消息到文件, 排查 BTC 数据问题
-    {
-      static int _cnt = 0;
-      if (++_cnt <= 100) {
-        FILE *fp = fopen("/tmp/kraken_v2_debug.log", "a");
-        if (fp) { fprintf(fp, "[%d] %s\n", _cnt, data.dump().c_str()); fclose(fp); }
-      }
-    }
     if (data.contains("method") || data.contains("success")) return;
     std::string ch = data.value("channel", "");
     if (ch.empty() || !data.contains("data") || !data["data"].is_array()) return;
@@ -591,19 +583,9 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
         auto it = find_inst(sym);
         if (it == symbol_to_inst_.end()) {
           static int _miss_cnt = 0;
-          if (++_miss_cnt <= 15) {
+          if (++_miss_cnt <= 10)
             fprintf(stderr, "[V2_MISS] '%s' NOT in symbol_to_inst_ (size=%zu)\n",
                     sym.c_str(), symbol_to_inst_.size());
-            FILE *fp = fopen("/tmp/kraken_v2_miss.log", "a");
-            if (fp) {
-              fprintf(fp, "[V2_MISS] '%s' NOT in symbol_to_inst_ (size=%zu)\n", sym.c_str(), symbol_to_inst_.size());
-              // dump all XBT/BTC keys
-              for (auto &[k, v] : symbol_to_inst_)
-                if (k.find("XBT") != std::string::npos || k.find("BTC") != std::string::npos)
-                  fprintf(fp, "  key: '%s'\n", k.c_str());
-              fclose(fp);
-            }
-          }
           continue;
         }
         NovaCoinTrade tr{};
@@ -615,15 +597,6 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
         tr.side = (t.value("side", "") == "buy") ? NOVA_SIDE_BUY : NOVA_SIDE_SELL;
         tr.local_time = local_ns;
         tr.local_ns = local_ns;
-        // BTC dispatch debug
-        std::string sym_str = it->second.GetSymbol();
-        if (sym_str.find("btc") != std::string::npos) {
-          static int _btc_cnt = 0;
-          if (++_btc_cnt <= 10) {
-            FILE *fp = fopen("/tmp/kraken_btc_dispatch.log", "a");
-            if (fp) { fprintf(fp, "[BTC_DISP] %s price=%.2f qty=%.6f\n", sym_str.c_str(), tr.price, tr.qty); fclose(fp); }
-          }
-        }
         dispatch(NOVA_COIN_QUOTE_TRADE, &tr, sizeof(tr));
       }
       return;
