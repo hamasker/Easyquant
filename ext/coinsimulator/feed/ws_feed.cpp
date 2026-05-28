@@ -572,9 +572,19 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
         auto it = find_inst(sym);
         if (it == symbol_to_inst_.end()) {
           static int _miss_cnt = 0;
-          if (++_miss_cnt <= 10)
+          if (++_miss_cnt <= 15) {
             fprintf(stderr, "[V2_MISS] '%s' NOT in symbol_to_inst_ (size=%zu)\n",
                     sym.c_str(), symbol_to_inst_.size());
+            FILE *fp = fopen("/tmp/kraken_v2_miss.log", "a");
+            if (fp) {
+              fprintf(fp, "[V2_MISS] '%s' NOT in symbol_to_inst_ (size=%zu)\n", sym.c_str(), symbol_to_inst_.size());
+              // dump all XBT/BTC keys
+              for (auto &[k, v] : symbol_to_inst_)
+                if (k.find("XBT") != std::string::npos || k.find("BTC") != std::string::npos)
+                  fprintf(fp, "  key: '%s'\n", k.c_str());
+              fclose(fp);
+            }
+          }
           continue;
         }
         NovaCoinTrade tr{};
