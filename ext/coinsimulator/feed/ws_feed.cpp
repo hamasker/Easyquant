@@ -127,7 +127,13 @@ public:
       INFO_FLOG("[WSFeed] Subscribed to {} binance streams", params.size());
     } else if (exchange_ == "kraken" || exchange_ == "krk") {
       for (auto &ch : feed_.channels()) {
-        nlohmann::json syms = feed_.symbols();  // 原样使用 feed symbols
+        nlohmann::json syms = nlohmann::json::array();
+        for (auto &s : feed_.symbols()) {
+          std::string sym = s;
+          size_t p = sym.find("XBT/");
+          if (p != std::string::npos) sym.replace(p, 3, "BTC");
+          syms.push_back(sym);
+        }
         nlohmann::json params{{"channel", ch}, {"symbol", syms}};
         if (ch == "book") params["depth"] = 10;
         if (ch == "trade") params["snapshot"] = true;
