@@ -300,7 +300,7 @@ MapChannels(const std::string &exchange,
       else if (ch == "trade") out.push_back("trades");
       else out.push_back(ch);
     } else if (exchange == "coinbase" || exchange == "cb") {
-      if (ch == "bbo") out.push_back("ticker");       // Exchange WS: ticker 推送 BBO
+      if (ch == "bbo") out.push_back("level2");       // level2 实时簿推导 BBO (比 ticker 快得多)
       else if (ch == "depth") out.push_back("level2");
       else if (ch == "trade") out.push_back("matches"); // Exchange WS: matches 推送逐笔成交
       else out.push_back(ch);
@@ -698,25 +698,31 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
     if (etype == "snapshot" || etype == "l2update") {
       auto &[bids, asks] = cb_book_[pair];
       if (etype == "snapshot") { bids.clear(); asks.clear(); }
-      auto apply = [&](const std::string &side, const nlohmann::json &arr) {
-        for (auto &v : arr) {
-          if (!v.is_array() || v.size() < 2) continue;
-          double px = std::stod(v[0].is_string() ? v[0].get<std::string>() : std::to_string(v[0].get<double>()));
-          double qty = std::stod(v[1].is_string() ? v[1].get<std::string>() : std::to_string(v[1].get<double>()));
+
+      if (etype == "snapshot") {
+        // snapshot: bids/asks 分别的二维数组 [price, qty]
+        auto apply_side = [&](const nlohmann::json &arr, bool is_bid) {
+          for (auto &v : arr) {
+            if (!v.is_array() || v.size() < 2) continue;
+            double px = std::stod(v[0].is_string() ? v[0].get<std::string>() : std::to_string(v[0].get<double>()));
+            double qty = std::stod(v[1].is_string() ? v[1].get<std::string>() : std::to_string(v[1].get<double>()));
+            if (qty <= 0) { if (is_bid) bids.erase(px); else asks.erase(px); }
+            else { if (is_bid) bids[px] = qty; else asks[px] = qty; }
+          }
+        };
+        if (data.contains("bids")) apply_side(data["bids"], true);
+        if (data.contains("asks")) apply_side(data["asks"], false);
+      } else {
+        // l2update: changes 是三维数组 [side, price, qty]
+        for (auto &v : data["changes"]) {
+          if (!v.is_array() || v.size() < 3) continue;
+          std::string side = v[0].is_string() ? v[0].get<std::string>() : "";
+          double px = std::stod(v[1].is_string() ? v[1].get<std::string>() : std::to_string(v[1].get<double>()));
+          double qty = std::stod(v[2].is_string() ? v[2].get<std::string>() : std::to_string(v[2].get<double>()));
           if (side == "buy") { if (qty<=0) bids.erase(px); else bids[px]=qty; }
-          else { if (qty<=0) asks.erase(px); else asks[px]=qty; }
+          else if (side == "sell") { if (qty<=0) asks.erase(px); else asks[px]=qty; }
         }
-      };
-      std::string key = (etype == "snapshot") ? "bids" : "changes";
-      if (data.contains(key)) {
-        auto &arr = data[key];
-        if (arr.is_array() && !arr.empty())
-          apply("buy", arr);  // for snapshot, bids array
       }
-      if (etype == "snapshot" && data.contains("asks"))
-        apply("sell", data["asks"]);
-      else if (etype == "l2update" && data.contains("changes"))
-        apply("sell", data["changes"]);  // re-apply with side detection
 
       // 保留 25 档
       constexpr int kMax = 25;
