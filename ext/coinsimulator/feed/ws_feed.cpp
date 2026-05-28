@@ -1009,6 +1009,16 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
     const auto &arg = data["arg"];
     std::string ch = arg.value("channel", "");
     const auto &items = data["data"];
+    // OKX raw message counter
+    if ((exchange == "okx" || exchange == "ok") && items.size() > 0) {
+      static int _okx_raw = 0, _okx_raw_items = 0;
+      _okx_raw++; _okx_raw_items += items.size();
+      if (_okx_raw <= 20)
+        fprintf(stderr, "[OKX_RAW] msg#%d ch=%s items=%zu total_items=%d inst_ok=%d\n",
+                _okx_raw, ch.c_str(), items.size(), _okx_raw_items, inst_id.Valid()?1:0);
+      if (_okx_raw == 100)  // print summary every 100
+        fprintf(stderr, "[OKX_SUM] 100 msgs, total_items=%d\n", _okx_raw_items);
+    }
     if (items.empty()) return;
 
     if (ch == "tickers") {
@@ -1030,6 +1040,9 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
       return;
     }
     if (ch == "bbo-tbt") {
+      static int _okx_bbo_msg = 0;
+      if (++_okx_bbo_msg <= 10)
+        fprintf(stderr, "[OKX_BBO] msg#%d inst_ok=%d\n", _okx_bbo_msg, inst_id.Valid()?1:0);
       // bbo-tbt 格式: data[0].bids[0]=[price,qty,0,orders], data[0].asks[0]=[price,qty,0,orders]
       const auto &d = items[0];
       NovaCoinBBO bbo{};
@@ -1056,6 +1069,11 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
       return;
     }
     if (ch == "trades") {
+      static int _okx_trade_msg = 0, _okx_trade_total = 0;
+      _okx_trade_msg++; _okx_trade_total += items.size();
+      if (_okx_trade_msg <= 10)
+        fprintf(stderr, "[OKX_TRADE] msg#%d items=%zu total_items=%d inst_ok=%d\n",
+                _okx_trade_msg, items.size(), _okx_trade_total, inst_id.Valid()?1:0);
       for (auto &t : items) {
         if (!t.is_object()) continue;
         NovaCoinTrade trade{};
