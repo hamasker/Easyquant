@@ -667,11 +667,11 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
     std::string etype = data.value("type", "");
     std::string pair = data.value("product_id", "");
 
-    // 记录所有 Coinbase 消息类型
+    // 记录所有 Coinbase 消息
     static int _cb_msg = 0;
-    if (++_cb_msg <= 40) {
+    if (++_cb_msg <= 50) {
       FILE *fp = fopen("/tmp/cb_debug.log", "a");
-      if (fp) { fprintf(fp, "[%d] type=%s pair=%s\n", _cb_msg, etype.c_str(), pair.c_str()); fclose(fp); }
+      if (fp) { fprintf(fp, "[%d] %s\n", _cb_msg, data.dump().c_str()); fclose(fp); }
     }
 
     if (pair.empty()) return;
