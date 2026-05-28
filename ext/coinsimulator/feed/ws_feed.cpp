@@ -555,8 +555,15 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
     if (ch == "trade") {
       for (auto &t : items) {
         if (!t.is_object()) continue;
-        auto it = find_inst(t.value("symbol", ""));
-        if (it == symbol_to_inst_.end()) continue;
+        std::string sym = t.value("symbol", "");
+        auto it = find_inst(sym);
+        if (it == symbol_to_inst_.end()) {
+          static int _miss_cnt = 0;
+          if (++_miss_cnt <= 10)
+            fprintf(stderr, "[V2_MISS] '%s' NOT in symbol_to_inst_ (size=%zu)\n",
+                    sym.c_str(), symbol_to_inst_.size());
+          continue;
+        }
         NovaCoinTrade tr{};
         tr.instrument_id = it->second;
         tr.price = t["price"].is_number() ? t["price"].get<double>()
