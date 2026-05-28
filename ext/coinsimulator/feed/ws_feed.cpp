@@ -596,6 +596,15 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
         tr.side = (t.value("side", "") == "buy") ? NOVA_SIDE_BUY : NOVA_SIDE_SELL;
         tr.local_time = local_ns;
         tr.local_ns = local_ns;
+        // BTC dispatch debug
+        std::string sym_str = it->second.GetSymbol();
+        if (sym_str.find("btc") != std::string::npos) {
+          static int _btc_cnt = 0;
+          if (++_btc_cnt <= 10) {
+            FILE *fp = fopen("/tmp/kraken_btc_dispatch.log", "a");
+            if (fp) { fprintf(fp, "[BTC_DISP] %s price=%.2f qty=%.6f\n", sym_str.c_str(), tr.price, tr.qty); fclose(fp); }
+          }
+        }
         dispatch(NOVA_COIN_QUOTE_TRADE, &tr, sizeof(tr));
       }
       return;
