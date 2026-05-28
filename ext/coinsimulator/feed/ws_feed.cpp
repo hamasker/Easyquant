@@ -300,8 +300,8 @@ MapChannels(const std::string &exchange,
       else if (ch == "trade") out.push_back("trades");
       else out.push_back(ch);
     } else if (exchange == "coinbase" || exchange == "cb") {
-      if (ch == "bbo") out.push_back("level2");       // level2 实时簿推导 BBO (比 ticker 快得多)
-      else if (ch == "depth") out.push_back("level2");
+      if (ch == "bbo") out.push_back("ticker");       // ticker 推送 BBO (level2 需认证)
+      else if (ch == "depth") out.push_back("level2"); // 需要认证
       else if (ch == "trade") out.push_back("matches"); // Exchange WS: matches 推送逐笔成交
       else out.push_back(ch);
     } else if (exchange == "gateio" || exchange == "gt") {
@@ -666,18 +666,10 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
   if (exchange == "cb" || exchange == "coinbase") {
     std::string etype = data.value("type", "");
     std::string pair = data.value("product_id", "");
-
-    // 记录所有 Coinbase 消息
-    static int _cb_msg = 0;
-    if (++_cb_msg <= 50) {
-      FILE *fp = fopen("/tmp/cb_debug.log", "a");
-      if (fp) { fprintf(fp, "[%d] %s\n", _cb_msg, data.dump().c_str()); fclose(fp); }
-    }
-
     if (pair.empty()) return;
 
-    // match → trade
-    if (etype == "match" && inst_id.Valid()) {
+    // match / last_match → trade
+    if ((etype == "match" || etype == "last_match") && inst_id.Valid()) {
       NovaCoinTrade tr{};
       tr.instrument_id = inst_id;
       tr.price = std::stod(data.value("price", "0"));
@@ -704,11 +696,6 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
 
     // snapshot / l2update → 维护本地簿 + BBO dispatch
     if (etype == "snapshot" || etype == "l2update") {
-      static int _snap_cnt = 0, _l2_cnt = 0;
-      if (etype == "snapshot" && ++_snap_cnt <= 3)
-        fprintf(stderr, "[CB_SNAP] pair=%s inst_ok=%d\n", pair.c_str(), inst_id.Valid()?1:0);
-      if (etype == "l2update" && ++_l2_cnt <= 3)
-        fprintf(stderr, "[CB_L2] pair=%s changes=%zu inst_ok=%d\n", pair.c_str(), data["changes"].size(), inst_id.Valid()?1:0);
       auto &[bids, asks] = cb_book_[pair];
       if (etype == "snapshot") { bids.clear(); asks.clear(); }
 
@@ -742,8 +729,6 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
       while ((int)bids.size() > kMax) bids.erase(std::prev(bids.end()));
       while ((int)asks.size() > kMax) asks.erase(std::prev(asks.end()));
       if (!bids.empty() && !asks.empty() && inst_id.Valid()) {
-        static int _bbo_cnt = 0;
-        if (++_bbo_cnt <= 3) fprintf(stderr, "[CB_BBO] %s bid=%.2f ask=%.2f\n", pair.c_str(), bids.begin()->first, asks.begin()->first);
         NovaCoinBBO bbo{};
         bbo.instrument_id = inst_id;
         bbo.bid_price = bids.begin()->first;
