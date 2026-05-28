@@ -534,17 +534,16 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
 
   // Kraken v2: {"channel":"trade/book/ticker","type":"snapshot/update","data":[...]}
   if ((exchange == "krk" || exchange == "kraken") && data.is_object()) {
-    if (data.contains("method") || data.contains("success")) {
-      static int _sub_cnt = 0;
-      if (++_sub_cnt <= 30)
-        fprintf(stderr, "[KRK_SUB] %s\n", data.dump().c_str());
-      return;
+    // DEBUG: 记录所有 v2 消息到文件, 排查 BTC 数据问题
+    {
+      static int _cnt = 0;
+      if (++_cnt <= 100) {
+        FILE *fp = fopen("/tmp/kraken_v2_debug.log", "a");
+        if (fp) { fprintf(fp, "[%d] %s\n", _cnt, data.dump().c_str()); fclose(fp); }
+      }
     }
+    if (data.contains("method") || data.contains("success")) return;
     std::string ch = data.value("channel", "");
-    // 记录未识别 channel 的消息
-    static int _unk_cnt = 0;
-    if (ch.empty() && ++_unk_cnt <= 10)
-      fprintf(stderr, "[KRK_UNK] %s\n", data.dump().c_str());
     if (ch.empty() || !data.contains("data") || !data["data"].is_array()) return;
     const auto &items = data["data"];
 
