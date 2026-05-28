@@ -696,6 +696,11 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
 
     // snapshot / l2update → 维护本地簿 + BBO dispatch
     if (etype == "snapshot" || etype == "l2update") {
+      static int _snap_cnt = 0, _l2_cnt = 0;
+      if (etype == "snapshot" && ++_snap_cnt <= 3)
+        fprintf(stderr, "[CB_SNAP] pair=%s inst_ok=%d\n", pair.c_str(), inst_id.Valid()?1:0);
+      if (etype == "l2update" && ++_l2_cnt <= 3)
+        fprintf(stderr, "[CB_L2] pair=%s changes=%zu inst_ok=%d\n", pair.c_str(), data["changes"].size(), inst_id.Valid()?1:0);
       auto &[bids, asks] = cb_book_[pair];
       if (etype == "snapshot") { bids.clear(); asks.clear(); }
 
@@ -729,6 +734,8 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
       while ((int)bids.size() > kMax) bids.erase(std::prev(bids.end()));
       while ((int)asks.size() > kMax) asks.erase(std::prev(asks.end()));
       if (!bids.empty() && !asks.empty() && inst_id.Valid()) {
+        static int _bbo_cnt = 0;
+        if (++_bbo_cnt <= 3) fprintf(stderr, "[CB_BBO] %s bid=%.2f ask=%.2f\n", pair.c_str(), bids.begin()->first, asks.begin()->first);
         NovaCoinBBO bbo{};
         bbo.instrument_id = inst_id;
         bbo.bid_price = bids.begin()->first;
