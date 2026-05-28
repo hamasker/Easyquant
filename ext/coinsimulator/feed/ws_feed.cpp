@@ -543,11 +543,17 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
     auto find_inst = [&](const std::string &sym) -> decltype(symbol_to_inst_.begin()) {
       auto it = symbol_to_inst_.find(sym);
       if (it != symbol_to_inst_.end()) return it;
-      std::string norm = symbol_mapping::normalize(sym);
-      for (auto &[k, v] : symbol_to_inst_) {
-        if (symbol_mapping::normalize(k) == norm)
-          return symbol_to_inst_.find(k);
-      }
+      // XBT↔BTC 互转尝试
+      std::string alt = sym;
+      size_t p = alt.find("/BTC");
+      if (p != std::string::npos) { alt.replace(p+1, 3, "XBT"); it = symbol_to_inst_.find(alt); if (it != symbol_to_inst_.end()) return it; }
+      alt = sym;
+      p = alt.find("/XBT");
+      if (p != std::string::npos) { alt.replace(p+1, 3, "BTC"); it = symbol_to_inst_.find(alt); if (it != symbol_to_inst_.end()) return it; }
+      alt = sym;
+      if (alt.compare(0, 3, "BTC") == 0) { alt.replace(0, 3, "XBT"); it = symbol_to_inst_.find(alt); if (it != symbol_to_inst_.end()) return it; }
+      alt = sym;
+      if (alt.compare(0, 3, "XBT") == 0) { alt.replace(0, 3, "BTC"); it = symbol_to_inst_.find(alt); if (it != symbol_to_inst_.end()) return it; }
       return symbol_to_inst_.end();
     };
 
