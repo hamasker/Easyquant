@@ -31,9 +31,7 @@ public:
   // symbol -> InstrumentId 映射 (prod 模式必需)
   // key: 交易所原生 symbol (如 "BTC/USD", "btcusdt")
   void SetInstrumentMap(
-      const std::unordered_map<std::string, InstrumentId> &mapping) {
-    symbol_to_inst_ = mapping;
-  }
+      const std::unordered_map<std::string, InstrumentId> &mapping);
 
   // 由 WSFeedSpi 回调
   void ProcessRawMessage(const std::string &exchange, const nlohmann::json &data);
@@ -51,6 +49,14 @@ public:
 
 private:
   void ConnectAndSubscribe();
+  void BuildDispatchIndex();
+
+  // combine symbol + qtype into single lookup key
+  static std::string DispatchKey(const std::string &sym, int qtype) {
+    std::string k(sym);
+    k.push_back(static_cast<char>(qtype));
+    return k;
+  }
 
   std::string exchange_;
   std::string ws_url_;
@@ -58,6 +64,8 @@ private:
   std::vector<std::string> symbols_;
   std::vector<std::string> channels_;
   std::unordered_map<std::string, InstrumentId> symbol_to_inst_;
+  // dispatch索引: key=symbol+qtype → sub下标
+  std::unordered_map<std::string, size_t> sub_index_;
   nova::ws::WSClientApi *ws_client_ = nullptr;
   std::atomic<bool> running_{true};
   bool connected_ = false;

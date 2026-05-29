@@ -63,3 +63,22 @@ channels 用通用名, 引擎自动映射各所最快频道:
 ## Strategy — X-macro 参数
 
 `include/configs/strategy_config.h`: `STRATEGY_CONFIG_FIELDS(X)` 加一行 `X(name, type, default)` 即可。子块: Stable/Order/Taker/Volatility/Cuscore/Verbose — 各自有独立 X-macro。
+
+### Strategy.Base (StableConfig) — 调度器参数
+
+`include/configs/stable_config.h` X-macro，可在 JSON `Strategy.Base` 下覆盖：
+
+| 字段 | 默认 | 说明 |
+|------|------|------|
+| `fp_turnover_usd` | 2000 | FP 触发成交额阈值 ($) |
+| `order_turnover_usd` | 35000 | Order 触发成交额阈值 ($) |
+| `fp_interval_min_ms` | 5 | FP 最小间隔 (ms)，防 flood |
+| `fp_interval_max_ms` | 200 | FP 最大间隔兜底 (ms)，冷清时强制触发 |
+| `order_interval_min_ms` | 1000 | Order 最小间隔 (ms)，防 rate limit |
+| `order_interval_max_ms` | 3500 | Order 最大间隔兜底 (ms) |
+| `negative_interval` | 5.0 | negative 检测间隔 (秒) |
+
+调度器谓词 (`include/common/scheduler.h`):
+- `should_fp`: `acc_usd_fp >= fp_turnover_usd AND ts - last_fp_ts > fp_interval_min`
+- `should_order`: `acc_usd_order >= order_turnover_usd AND ts - last_order_ts > order_interval_min OR ts - last_order_ts > order_interval_max`
+- `should_disconnect`: 断连标记 OR aim exchange 30s 无数据 → 撤单

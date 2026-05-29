@@ -1,27 +1,26 @@
 # 已知问题和约定
 
-## Kraken v2 WebSocket 集成注意事项
+## USDT FP stale depth (已修复)
 
-### XBT/BTC 双重命名（已修复）
+`calculate_fp_usdt` 需 5 个 Kraken depth pair 全部新鲜（5s 内）。Kraken v2 book handler 原要求 `!bids.empty() && !asks.empty()` 才 dispatch DepthLVN，交叉对（usdt_eur, usdc_usdt 等）orderbook 薄，某侧长期为空 → DepthLVN 永不 dispatch → `depth_map.local_ts` 永久为 0 → 5 对全 stale。
 
-Kraken 对 BTC 使用两套命名：
-- REST API `wsname`: `XBT/USD`
-- WebSocket v2 实际推送的 symbol: `BTC/USD`
+**修复** (`ws_feed.cpp:656`): `&&` → `||`，单侧有数据即 dispatch。
 
-**影响**: `ProcessRawMessage` 有两层 `inst_id` 查找，必须都做 XBT↔BTC 转换：
+## FP 启动时空 buffer 崩溃 (已修复)
 
-1. **外层** (`ws_feed.cpp:480-500`)：`ExtractSymbol()` → `symbol_to_inst_` lookup → 设置 `inst_id`
-   - `dispatch` lambda 用这个 `inst_id` 匹配订阅者（`state.subs[i].position->instrument.key() == inst_id.key()`）
-2. **Kraken v2 handler 内** (`find_inst` 闭包)：对每个 trade/book/ticker 做 XBT↔BTC 转换后匹配
+`calculate_fp_usdt` 遇到 stale 提前返回时未写 `fps_map_[USDT]`，后续 `calculate_fp_usdc/forex` 调用 `get_latest()` 抛异常。
 
-如果外层 lookup 失败 → `inst_id` 无效 → dispatch lambda 匹配失败 → 数据被静默丢弃。v2 handler 内的 `find_inst` 单独工作是不够的。
+**修复**: `calculate_fp_usdt` 返回 bool；`update()` 检查结果和 buffer 非空后才执行后续计算。
 
-**修复** (`95594e7`, `2ef928e`)：外层 lookup 增加四路转换：
-```cpp
-// "BTC/USD" → "XBT/USD", "XBT/USD" → "BTC/USD"
-// "BTC/EUR" → "XBT/EUR" (通过 compare(0,3,"BTC") → replace → "XBT/EUR")
-// "XBT/..." → "BTC/..."
-```
+## O(1) symbol 查找 & dispatch (已优化)
+
+`ws_feed.cpp:PrefillSymbolVariants()` 在 init 时预计算 XBT↔BTC 转换 + 小写变体到 `symbol_to_inst_`，热路径只需一次 `find()`（原 4 次 XBT↔BTC + O(n) 大小写遍历）。
+
+`ws_feed.cpp:BuildDispatchIndex()` 预建 `(symbol,qtype)→sub_index` 映射，dispatch 从 O(n) 遍历降为 O(1)。
+
+## XBT/BTC 双重命名（已通过 PrefillSymbolVariants 简化）
+
+Kraken 使用两套命名：REST `XBT/USD`，WS v2 推送 `BTC/USD`。外层 lookup 和 v2 handler 内 `find_inst` 都需要双向转换。修复通过 `PrefillSymbolVariants` 预计算所有变体，热路径只需单次 `find()`。
 
 ### Kraken v2 订阅格式
 

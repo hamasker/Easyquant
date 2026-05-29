@@ -448,6 +448,47 @@ void WSFeed::ConnectAndSubscribe() {
 
 // ========== 消息处理 ==========
 
+static void PrefillSymbolVariants(
+    std::unordered_map<std::string, InstrumentId> &map) {
+  std::vector<std::pair<std::string, InstrumentId>> variants;
+  for (const auto &[sym, inst] : map) {
+    for (const auto &[from, to] :
+         {std::pair{"BTC", "XBT"}, {"XBT", "BTC"}}) {
+      size_t p = sym.find(std::string("/") + from);
+      if (p != std::string::npos) {
+        std::string v = sym; v.replace(p + 1, 3, to);
+        variants.emplace_back(v, inst);
+      }
+      if (sym.compare(0, 3, from) == 0) {
+        std::string v = sym; v.replace(0, 3, to);
+        variants.emplace_back(v, inst);
+      }
+    }
+    std::string lower = sym;
+    std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+    if (lower != sym) variants.emplace_back(std::move(lower), inst);
+  }
+  for (auto &[sym, inst] : variants) map.try_emplace(std::move(sym), inst);
+}
+
+void WSFeed::SetInstrumentMap(
+    const std::unordered_map<std::string, InstrumentId> &mapping) {
+  symbol_to_inst_ = mapping;
+  PrefillSymbolVariants(symbol_to_inst_);
+}
+
+void WSFeed::BuildDispatchIndex() {
+  sub_index_.clear();
+  auto &state = MockServiceState::Instance();
+  for (size_t i = 0; i < state.subs.size(); ++i) {
+    if (state.subs[i].position) {
+      sub_index_.emplace(
+          DispatchKey(state.subs[i].position->instrument.symbol,
+                      static_cast<int>(state.subs[i].quote_type)), i);
+    }
+  }
+}
+
 void WSFeed::ProcessRawMessage(const std::string &exchange,
                                const nlohmann::json &data) {
   if (data.contains("result") && data.contains("id") && !data.contains("e"))
@@ -476,78 +517,38 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
 
   int64_t local_ns = NowNs();
 
-  // 提取交易所原生 symbol -> InstrumentId
+  if (sub_index_.empty()) BuildDispatchIndex();
+
   auto raw_sym = ExtractSymbol(exchange, data);
   InstrumentId inst_id{};
   if (!raw_sym.empty() && !symbol_to_inst_.empty()) {
-    // 先精确查找
     auto it = symbol_to_inst_.find(raw_sym);
-    if (it == symbol_to_inst_.end()) {
-      // XBT↔BTC 互转尝试 (Kraken v2 BTC pairs)
-      std::string alt = raw_sym;
-      size_t p = alt.find("/BTC");
-      if (p != std::string::npos) { alt.replace(p+1, 3, "XBT"); it = symbol_to_inst_.find(alt); }
-      if (it == symbol_to_inst_.end()) {
-        alt = raw_sym;
-        p = alt.find("/XBT");
-        if (p != std::string::npos) { alt.replace(p+1, 3, "BTC"); it = symbol_to_inst_.find(alt); }
-      }
-      if (it == symbol_to_inst_.end()) {
-        alt = raw_sym;
-        if (alt.compare(0, 3, "BTC") == 0) { alt.replace(0, 3, "XBT"); it = symbol_to_inst_.find(alt); }
-      }
-      if (it == symbol_to_inst_.end()) {
-        alt = raw_sym;
-        if (alt.compare(0, 3, "XBT") == 0) { alt.replace(0, 3, "BTC"); it = symbol_to_inst_.find(alt); }
-      }
-    }
-    if (it != symbol_to_inst_.end()) {
-      inst_id = it->second;
-    } else {
-      // 大小写不敏感查找
-      std::string raw_lower = raw_sym;
-      std::transform(raw_lower.begin(), raw_lower.end(), raw_lower.begin(), ::tolower);
-      for (auto &[key, val] : symbol_to_inst_) {
-        std::string key_lower = key;
-        std::transform(key_lower.begin(), key_lower.end(), key_lower.begin(), ::tolower);
-        if (raw_lower == key_lower) {
-          inst_id = val;
-          break;
-        }
-      }
-    }
+    if (it != symbol_to_inst_.end()) inst_id = it->second;
   }
 
   static std::unordered_map<std::string, int> dispatch_cnt;
   auto dispatch = [&](NOVA_COIN_QUOTE_TYPE qtype, const void *ptr, size_t size) {
-    // 优先精确匹配 instrument_id
-    for (size_t i = 0; i < state.subs.size(); ++i) {
-      if (state.subs[i].quote_type == qtype &&
-          state.subs[i].position &&
-          state.subs[i].position->instrument.key() == inst_id.key()) {
-        di_mgr->Push(i, ptr, local_ns);
-        if (state.subs[i].trigger && state.strategy) {
-          if (++dispatch_cnt[exchange] <= 3)
-            INFO_FLOG("[WSFeed] dispatch {} qtype={} di={} inst={}", exchange_,
-                    (int)qtype, i, inst_id.symbol);
-          state.strategy->on_datainfo(di_mgr, static_cast<int32_t>(i),
-                                       state.subs[i].position);
+    auto sit = sub_index_.find(DispatchKey(inst_id.symbol, static_cast<int>(qtype)));
+    if (sit == sub_index_.end()) return;
+    size_t i = sit->second;
+    di_mgr->Push(i, ptr, local_ns);
+    if (state.subs[i].trigger && state.strategy) {
+      if (++dispatch_cnt[exchange] <= 3)
+        INFO_FLOG("[WSFeed] dispatch {} qtype={} di={} inst={}", exchange_,
+                (int)qtype, i, inst_id.symbol);
+      state.strategy->on_datainfo(di_mgr, static_cast<int32_t>(i),
+                                   state.subs[i].position);
+    }
+    if (qtype == NOVA_COIN_QUOTE_BBO && inst_id.Valid()) {
+      auto *bbo = static_cast<const NovaCoinBBO *>(ptr);
+      for (auto *engine : state.engines) {
+        auto *mock = dynamic_cast<MockTradeEngine *>(engine);
+        if (mock && engine->Exchange() == inst_id.exchange) {
+          mock->UpdateBBO(inst_id, bbo->bid_price, bbo->ask_price,
+                          bbo->bid_qty, bbo->ask_qty);
         }
-        // BBO 同步到撮合引擎
-        if (qtype == NOVA_COIN_QUOTE_BBO && inst_id.Valid()) {
-          auto *bbo = static_cast<const NovaCoinBBO *>(ptr);
-          for (auto *engine : state.engines) {
-            auto *mock = dynamic_cast<MockTradeEngine *>(engine);
-            if (mock && engine->Exchange() == inst_id.exchange) {
-              mock->UpdateBBO(inst_id, bbo->bid_price, bbo->ask_price,
-                              bbo->bid_qty, bbo->ask_qty);
-            }
-          }
-        }
-        return;
       }
     }
-    // 无精确匹配订阅 → 数据对策略无用, 不 dispatch
     (void)size;
   };
 
@@ -558,22 +559,8 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
     if (ch.empty() || !data.contains("data") || !data["data"].is_array()) return;
     const auto &items = data["data"];
 
-    // 通用 symbol 匹配 (使用 symbol_mapping 归一化)
-    auto find_inst = [&](const std::string &sym) -> decltype(symbol_to_inst_.begin()) {
-      auto it = symbol_to_inst_.find(sym);
-      if (it != symbol_to_inst_.end()) return it;
-      // XBT↔BTC 互转尝试
-      std::string alt = sym;
-      size_t p = alt.find("/BTC");
-      if (p != std::string::npos) { alt.replace(p+1, 3, "XBT"); it = symbol_to_inst_.find(alt); if (it != symbol_to_inst_.end()) return it; }
-      alt = sym;
-      p = alt.find("/XBT");
-      if (p != std::string::npos) { alt.replace(p+1, 3, "BTC"); it = symbol_to_inst_.find(alt); if (it != symbol_to_inst_.end()) return it; }
-      alt = sym;
-      if (alt.compare(0, 3, "BTC") == 0) { alt.replace(0, 3, "XBT"); it = symbol_to_inst_.find(alt); if (it != symbol_to_inst_.end()) return it; }
-      alt = sym;
-      if (alt.compare(0, 3, "XBT") == 0) { alt.replace(0, 3, "BTC"); it = symbol_to_inst_.find(alt); if (it != symbol_to_inst_.end()) return it; }
-      return symbol_to_inst_.end();
+    auto find_inst = [&](const std::string &sym) {
+      return symbol_to_inst_.find(sym);
     };
 
     if (ch == "trade") {
@@ -654,7 +641,7 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
           depth.ask[i].price = px; depth.ask[i].qty = qty; ++i;
         }
         depth.ob_level = static_cast<uint16_t>(std::max((int)depth.ob_level, i));
-        if (!bids.empty() && !asks.empty())
+        if (!bids.empty() || !asks.empty())
           dispatch(NOVA_COIN_QUOTE_DEPTH_LVN, &depth, sizeof(depth));
       }
       return;

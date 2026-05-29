@@ -5,6 +5,7 @@
  * Created by Yurong Chen (gghamasker@gmail.com) on 2025-12-22.
  *****************************************************************************/
 #include "container_util.h"
+#include <chrono>
 #define RYML_SINGLE_HDR_DEFINE_NOW
 #include "common/volume_pairs.h"
 #include "taking_all_multi.h"
@@ -165,8 +166,14 @@ bool TakingDemo::on_init(const Config *cfg) {
   scheduler_.init(CFG_.Strategy.Stable.negative_interval,
                   CFG_.Strategy.Stable.fp_turnover_usd,
                   CFG_.Strategy.Stable.order_turnover_usd,
+                  CFG_.Strategy.Stable.fp_interval_min_ms,
                   CFG_.Strategy.Stable.fp_interval_max_ms,
-                  CFG_.Strategy.Stable.order_interval_max_ms, ts);
+                  CFG_.Strategy.Stable.order_interval_min_ms,
+                  CFG_.Strategy.Stable.order_interval_max_ms,
+                  static_cast<int64_t>(
+                      std::chrono::duration_cast<std::chrono::nanoseconds>(
+                          std::chrono::system_clock::now().time_since_epoch())
+                          .count()));
   return true;
 }
 
@@ -206,18 +213,23 @@ void TakingDemo::on_datainfo(const DataInfoManager *datainfo, int32_t di,
     const auto &data = *static_cast<const Depth *>(one.buffer().back());
     global_ts = data.local_time;
   } else if (quote_type == NOVA_COIN_QUOTE_DEPTH_LVN) {
-
     const auto &data = *static_cast<const DepthLVN *>(one.buffer().back());
     global_ts = data.local_time;
   } else if (quote_type == NOVA_COIN_QUOTE_TRADE) {
     const auto *trade = static_cast<const Trade *>(one.buffer().back());
     global_ts = trade->local_time;
-    INFO_FLOG("[OnDatainfo] trade_symbol: {}", trade->instrument_id.symbol);
+    // 追踪 aim exchange (Kraken) 数据到达时间, 用于断连检测
+    if (position && sum_util::EndsWith(position->instrument.symbol,
+                                       CFG_.Strategy.Stable.aim_exchange))
+      scheduler_.last_aim_data_ts_ = global_ts;
     // turnover 累加 (O(1) 集合判断)
-    auto t_it = InstData_.IM.inststr2id_.find(trade->instrument_id.symbol);
-    if (t_it != InstData_.IM.inststr2id_.end() &&
-        turnover_pairs_.contains(t_it->second))
+    if (sum_util::Find(turnover_pairs_.subscribed_str,
+                       trade->instrument_id.symbol)) {
+      // DEBUG_FLOG("symbol: {}, price: {}, qty: {}, turnover: {}",
+      //           trade->instrument_id.symbol, trade->price, trade->qty,
+      //           trade->price * trade->qty); // todo: 转换到USD
       scheduler_.add_turnover(trade->price * trade->qty);
+    }
   }
   if (scheduler_.flag_first) {
     INFO_FLOG("[OnStrategy]trigger on_datainfo success {}",
@@ -235,6 +247,7 @@ void TakingDemo::on_datainfo(const DataInfoManager *datainfo, int32_t di,
 }
 
 void TakingDemo::on_reminder(void *, uint64_t cur_ns) {
+  scheduler_.log_turnover_rate(static_cast<int64_t>(cur_ns));
   do_calculations(static_cast<int64_t>(cur_ns));
   AddReminder(cur_ns + 10'000'000, nullptr); // 10ms 后再次触发
 }
@@ -251,7 +264,7 @@ void TakingDemo::do_calculations(int64_t current_ts) {
   if (!scheduler_.flag_data_ready)
     return;
   InstData_.global_ts = current_ts;
-  // * 检测断连
+  // * 检测断连 (含 aim exchange 30s 无数据自动触发)
   if (scheduler_.should_disconnect(current_ts)) {
     process_disconnect(current_ts);
     scheduler_.mark_disconnect(current_ts);
@@ -323,7 +336,6 @@ void TakingDemo::process_negative(int64_t ts) {
 }
 
 void TakingDemo::process_fp(int64_t ts) {
-  DataProcess::fetch_data_all(last_data_info, InstData_, CFG_);
   fpg_->update(ts);
 }
 

@@ -136,7 +136,7 @@ inline void LoadOrderConfig(const nova::base::Config *cfg, OrderConfig &oc) {
   X(customer_balance, bool, false)                                             \
   X(recover_usd, double, -1.0)                                                 \
   X(digital_position_thre, double, 0.0)                                        \
-  X(flexible_adjust, bool, false)
+  X(adjust_inst_fp, bool, false)
 
 struct StrategyBlock {
   StableConfig Stable;

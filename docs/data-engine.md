@@ -34,17 +34,34 @@ mmap 零拷贝, 1000条/批读取。149MB 0.17s 跑完。
 
 Python 转换器: `python/convert_parquet_to_bin.py <exchange> <symbol> <date>`
 
+## O(1) dispatch 索引
+
+`ws_feed.cpp:BuildDispatchIndex()` 在首次消息到达时预建 `(symbol, qtype) → sub_index` 映射，dispatch 从 O(n) 遍历 subs 降为 O(1) 查表。
+
+## Symbol 变体预填充
+
+`ws_feed.cpp:PrefillSymbolVariants()` 在 `SetInstrumentMap` 时预计算 XBT↔BTC 转换 + 小写变体，`ProcessRawMessage` 中 symbol 查找从多段 fallback 降为单次 `find()`。
+
+## Kraken DepthLVN 单侧 dispatch
+
+Kraken v2 book handler (`ws_feed.cpp:656`): 交叉对(orderbook 薄)某侧可能为空，旧逻辑 `!bids.empty() && !asks.empty()` 导致 DepthLVN 永不 dispatch。修复为 `||`，单侧有数据即推送。
+
 ## on_datainfo 数据处理
 
 ```
 on_datainfo (WSFeed IO线程):
   fetch_data → extract_depth/bbo/trade → InstData_ 写入
   更新 global_ts
+  追踪 aim exchange (Kraken) 数据到达时间 → scheduler_.last_aim_data_ts_
   trade 成交量 → turnover 累加到 scheduler
   返回 (μs级)
 ```
 
 去重: `md.update_time <= dd.server_ts` (含相同时间戳)。
+
+## process_fp 优化
+
+`process_fp` 中 `fetch_data_all` 已移除（冗余——`on_datainfo` 已逐条提取）。ID 查找每轮 FP 计算执行 ~15 次 `fmt::format` + `id_map.at()`，中位 FP 频率下可接受。
 
 ## 重连策略
 
