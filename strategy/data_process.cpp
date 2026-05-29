@@ -57,8 +57,6 @@ bool fetch_data(const nova::quote::DataInfo &one,
   auto &id_map = InstData_.IM.inststr2id_;
   std::string inst_str;
   int64_t ts = 0;
-  if (CFG_.Strategy.Verbose.ob)
-    DEBUG_FLOG("[Ob] qtype={}", (int)quote_type);
   if (quote_type == NOVA_COIN_QUOTE_DEPTH) {
     const auto &data = *static_cast<const Depth *>(one.buffer().back());
     inst_str = data.instrument_id.symbol;
@@ -105,10 +103,12 @@ bool fetch_data(const nova::quote::DataInfo &one,
     inst_str = data.instrument_id.symbol;
     ts = data.local_time;
     auto it = id_map.find(inst_str);
-    if (it == id_map.end()) return false;
+    if (it == id_map.end())
+      return false;
     auto id = it->second;
     // 先判断是否在 trade_map 中, 是才记录
-    if (!InstData_.trade_map.count(id)) return false;
+    if (!InstData_.trade_map.count(id))
+      return false;
     InstData_.trade_map[id].add_trade(data.local_time, data.side, data.price,
                                       data.qty);
     // 日志放在 depth/bbo 判断前面, 确保 turnover-only inst 也能打印

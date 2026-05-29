@@ -33,7 +33,12 @@ int64_t NowNs() {
 std::string ExtractSymbol(const std::string &exchange,
                           const nlohmann::json &data) {
   if (exchange == "binance" || exchange == "bn" || exchange == "bn_swap") {
-    if (data.contains("s")) return data["s"].get<std::string>();
+    // Binance WS 推送大写 symbol, MakeExchangeSymbol 生成小写 key, 统一转小写
+    auto to_lower = [](std::string s) {
+      std::transform(s.begin(), s.end(), s.begin(), ::tolower);
+      return s;
+    };
+    if (data.contains("s")) return to_lower(data["s"].get<std::string>());
     if (data.contains("stream")) {
       std::string stream = data["stream"].get<std::string>();
       auto pos = stream.find('@');

@@ -1,23 +1,23 @@
 #include "strategy_runner.h"
 
-#include "feed/feed_engine.h"
-#include "feed/ws_feed.h"
-#include "feed/mmap_backtest_feed.h"
 #include "feed/backtest_feed.h"
-#include "mock/mock_server.h"
-#include "mock/mock_trade_service.h"
-#include "mock/mock_trade_engine.h"
-#include "mock/kraken_trade_engine.h"
-#include "mock/exch_trade_engines.h"
+#include "feed/feed_engine.h"
+#include "feed/mmap_backtest_feed.h"
+#include "feed/ws_feed.h"
 #include "mock/backtest_trade_engine.h"
+#include "mock/exch_trade_engines.h"
+#include "mock/kraken_trade_engine.h"
+#include "mock/mock_server.h"
+#include "mock/mock_trade_engine.h"
+#include "mock/mock_trade_service.h"
 
-#include "taking_all_multi.h"
 #include "coinrunner_log.h"
+#include "taking_all_multi.h"
 
-#include "nova_api_instrument.h"
-#include "nlohmann_json/json.hpp"
 #include "base/base_async_log.h"
 #include "base/base_config.h"
+#include "nlohmann_json/json.hpp"
+#include "nova_api_instrument.h"
 
 #include <chrono>
 #include <csignal>
@@ -63,7 +63,8 @@ std::string MakeExchangeSymbol(const InstrumentId &inst_id) {
     return t_lower + c_lower;
   case NOVA_EXCHANGE_KRAKE:
     // btc → xbt (唯一特殊转换)
-    if (t_lower == "btc") t_lower = "xbt";
+    if (t_lower == "btc")
+      t_lower = "xbt";
     // 长度>3且X/Z前缀 = Kraken API 全名 (XXBT→XBT, ZUSD→USD)
     // 长度≤3 = 内部短名 (eth/xrp/sol), 不 strip
     if (t_lower.size() > 3 && t_lower[0] == 'x')
@@ -81,7 +82,8 @@ std::string MakeExchangeSymbol(const InstrumentId &inst_id) {
     return t_lower + "-" + c_lower;
   case NOVA_EXCHANGE_COINBASE:
     std::transform(ticker.begin(), ticker.end(), ticker.begin(), ::toupper);
-    std::transform(currency.begin(), currency.end(), currency.begin(), ::toupper);
+    std::transform(currency.begin(), currency.end(), currency.begin(),
+                   ::toupper);
     return ticker + "-" + currency;
   case NOVA_EXCHANGE_GT:
     // Gate.io: BASE_QUOTE 大写+下划线
@@ -101,26 +103,26 @@ std::string MakeExchangeSymbol(const InstrumentId &inst_id) {
 std::vector<std::string> DefaultChannelsForExchange(NOVA_EXCHANGE_TYPE exch) {
   switch (exch) {
   case NOVA_EXCHANGE_KRAKE:
-    return {"bbo", "depth"};  // Kraken 需要 depth 做 FP
+    return {"bbo", "depth"}; // Kraken 需要 depth 做 FP
   case NOVA_EXCHANGE_GT:
-    return {"bbo", "trade"};  // Gate.io 默认 BBO + trade
+    return {"bbo", "trade"}; // Gate.io 默认 BBO + trade
   case NOVA_EXCHANGE_MEXC:
-    return {"bbo", "trade"};  // MEXC 默认 BBO + trade
+    return {"bbo", "trade"}; // MEXC 默认 BBO + trade
   default:
-    return {"bbo"};           // 其余默认只要 BBO
+    return {"bbo"}; // 其余默认只要 BBO
   }
 }
 
-std::string ExchangeToShortName(NOVA_EXCHANGE_TYPE exch) {
-  switch (exch) {
-  case NOVA_EXCHANGE_BINANCE: return "bn";
-  case NOVA_EXCHANGE_KRAKE:  return "krk";
-  case NOVA_EXCHANGE_OK:     return "ok";
-  case NOVA_EXCHANGE_COINBASE:return "cb";
-  case NOVA_EXCHANGE_GT:     return "gt";
-  default: return "unknown";
-  }
-}
+// std::string ExchangeToShortName(NOVA_EXCHANGE_TYPE exch) {
+//   switch (exch) {
+//   case NOVA_EXCHANGE_BINANCE: return "bn";
+//   case NOVA_EXCHANGE_KRAKE:  return "krk";
+//   case NOVA_EXCHANGE_OK:     return "ok";
+//   case NOVA_EXCHANGE_COINBASE:return "cb";
+//   case NOVA_EXCHANGE_GT:     return "gt";
+//   default: return "unknown";
+//   }
+// }
 
 } // namespace
 
@@ -146,15 +148,20 @@ bool StrategyRunner::Initialize() {
   std::signal(SIGTERM, SignalHandler);
 
   INFO_FLOG("[coinrunner] Init: mock framework");
-  if (!InitMockFramework()) return false;
+  if (!InitMockFramework())
+    return false;
   INFO_FLOG("[coinrunner] Init: config");
-  if (!InitConfig()) return false;
+  if (!InitConfig())
+    return false;
   INFO_FLOG("[coinrunner] Init: engines");
-  if (!InitEngines()) return false;
+  if (!InitEngines())
+    return false;
   INFO_FLOG("[coinrunner] Init: strategy");
-  if (!InitStrategy()) return false;
+  if (!InitStrategy())
+    return false;
   INFO_FLOG("[coinrunner] Init: feed ({})", mode_);
-  if (!InitFeed()) return false;
+  if (!InitFeed())
+    return false;
   INFO_FLOG("[coinrunner] Init complete, entering loop");
   running_ = true;
   return true;
@@ -173,8 +180,8 @@ bool StrategyRunner::InitConfig() {
     server->config()->GetItemValue("Server.Log.screen_level", screen_lv);
     server->config()->GetItemValue("Server.Log.file_level", file_lv);
     if (!screen_lv.empty())
-      nova::log::SetScreenLevel(
-          static_cast<int>(nova::log::GetLogLevelFromString(screen_lv.c_str())));
+      nova::log::SetScreenLevel(static_cast<int>(
+          nova::log::GetLogLevelFromString(screen_lv.c_str())));
     if (!file_lv.empty())
       nova::log::SetFileLevel(
           static_cast<int>(nova::log::GetLogLevelFromString(file_lv.c_str())));
@@ -193,7 +200,8 @@ bool StrategyRunner::InitConfig() {
 
     bool async_log = false;
     server->config()->GetItemValue("Server.Log.async_log", async_log);
-    if (async_log) nova::log::SetAsync(true);
+    if (async_log)
+      nova::log::SetAsync(true);
   }
   return true;
 }
@@ -203,8 +211,8 @@ bool StrategyRunner::InitEngines() {
 
   // 解析 Trade.TradeEngine
   picojson::value ary;
-  bool has_engine_list = cfg->GetItemValue("Trade.TradeEngine", ary) &&
-                         ary.is<picojson::array>();
+  bool has_engine_list =
+      cfg->GetItemValue("Trade.TradeEngine", ary) && ary.is<picojson::array>();
 
   if (!has_engine_list || ary.get<picojson::array>().empty()) {
     throw std::runtime_error("Trade.TradeEngine must be a non-empty array");
@@ -213,14 +221,20 @@ bool StrategyRunner::InitEngines() {
   bool any_real = false, any_mock = false;
   // engine_name → ws_exch 映射
   static const std::unordered_map<std::string, std::string> name_to_ws = {
-      {"BinanceSpotEngine", "bn"}, {"BinanceSwapEngine", "bn_swap"},
-      {"KrakenSpotEngine", "krk"}, {"OKXSpotEngine", "ok"},
+      {"BinanceSpotEngine", "bn"},
+      {"BinanceSwapEngine", "bn_swap"},
+      {"KrakenSpotEngine", "krk"},
+      {"OKXSpotEngine", "ok"},
       {"CoinbaseSpotEngine", "cb"}};
 
   for (auto &item : ary.get<picojson::array>()) {
     std::string name = item.contains("name") ? item.get("name").to_str() : "";
-    int delay_ms = item.contains("match_delay_ms") ? (int)item.get("match_delay_ms").get<double>() : 0;
-    int fill_ratio = item.contains("match_fill_ratio") ? (int)item.get("match_fill_ratio").get<double>() : 100;
+    int delay_ms = item.contains("match_delay_ms")
+                       ? (int)item.get("match_delay_ms").get<double>()
+                       : 0;
+    int fill_ratio = item.contains("match_fill_ratio")
+                         ? (int)item.get("match_fill_ratio").get<double>()
+                         : 100;
 
     // 提取 WS 配置
     if (item.contains("ws_front_address")) {
@@ -228,7 +242,9 @@ bool StrategyRunner::InitEngines() {
       if (ws_it != name_to_ws.end()) {
         auto &info = ws_configs_[ws_it->second];
         info.ws_url = item.get("ws_front_address").to_str();
-        info.ws_core = item.contains("ws_core") ? (int)item.get("ws_core").get<double>() : -1;
+        info.ws_core = item.contains("ws_core")
+                           ? (int)item.get("ws_core").get<double>()
+                           : -1;
       }
     }
 
@@ -247,15 +263,20 @@ bool StrategyRunner::InitEngines() {
     if (name == "MockEngine") {
       e = new MockTradeEngine();
     } else if (name == "KrakenSpotEngine") {
-      e = new KrakenTradeEngine(); api_section = "kraken";
+      e = new KrakenTradeEngine();
+      api_section = "kraken";
     } else if (name == "BinanceSpotEngine") {
-      e = new BinanceTradeEngine(); api_section = "binance";
+      e = new BinanceTradeEngine();
+      api_section = "binance";
     } else if (name == "BinanceSwapEngine") {
-      e = new BinanceSwapTradeEngine(); api_section = "binance_u";
+      e = new BinanceSwapTradeEngine();
+      api_section = "binance_u";
     } else if (name == "OKXSpotEngine") {
-      e = new OKXTradeEngine(); api_section = "okex";
+      e = new OKXTradeEngine();
+      api_section = "okex";
     } else if (name == "CoinbaseSpotEngine") {
-      e = new CoinbaseTradeEngine(); api_section = "coinbase";
+      e = new CoinbaseTradeEngine();
+      api_section = "coinbase";
     }
 
     if (e) {
@@ -282,7 +303,8 @@ bool StrategyRunner::InitEngines() {
         mock->SetMatchFillRatio(fill_ratio);
         if (item.contains("record_dir")) {
           auto dir = item.get("record_dir").to_str();
-          if (!dir.empty()) mock->SetRecordDir(dir);
+          if (!dir.empty())
+            mock->SetRecordDir(dir);
         }
       }
       RegisterEngine(e);
@@ -302,12 +324,13 @@ bool StrategyRunner::InitEngines() {
   } else {
     // 全是 MockEngine → 检查 Quote 判断 mock 还是 backtest
     bool has_quote = false, has_backtest = false;
-    static const char *exch_sections[] = {"binance", "binance_u", "kraken",
-                                          "okex", "coinbase", "gateio", "mexc"};
+    static const char *exch_sections[] = {
+        "binance", "binance_u", "kraken", "okex", "coinbase", "gateio", "mexc"};
     for (auto *sec : exch_sections) {
       bool en = false;
       cfg->GetItemValue((std::string("Quote.") + sec + ".enabled").c_str(), en);
-      if (en) has_quote = true;
+      if (en)
+        has_quote = true;
     }
     std::string backtest_begin;
     cfg->GetItemValue("Quote.backtest.begin_time", backtest_begin);
@@ -328,7 +351,8 @@ bool StrategyRunner::InitEngines() {
   }
 
   // 注册引擎
-  for (auto *engine : engines_) RegisterMockEngine(engine);
+  for (auto *engine : engines_)
+    RegisterMockEngine(engine);
   auto &state = MockServiceState::Instance();
   state.engines = engines_;
 
@@ -363,7 +387,8 @@ bool StrategyRunner::InitStrategy() {
   // 给所有 MockTradeEngine 设置 strategy 回调指针
   for (auto *engine : engines_) {
     auto *mock_engine = dynamic_cast<MockTradeEngine *>(engine);
-    if (mock_engine) mock_engine->SetStrategy(strategy_);
+    if (mock_engine)
+      mock_engine->SetStrategy(strategy_);
   }
 
   return true;
@@ -396,7 +421,8 @@ bool StrategyRunner::InitFeed() {
   }
 
   // mock/prod 都从 Quote 配置驱动数据源
-  if (!InitProdFeeds()) return false;
+  if (!InitProdFeeds())
+    return false;
 
   INFO_FLOG("[Runner] Feed engine ({}) initialized with {} feed(s)", mode_,
             feeds_.size());
@@ -423,8 +449,8 @@ bool StrategyRunner::InitProdFeeds() {
       {"kraken", NOVA_EXCHANGE_KRAKE, NOVA_COIN_INST_TYPE_SPOT, "krk"},
       {"okex", NOVA_EXCHANGE_OK, NOVA_COIN_INST_TYPE_SPOT, "ok"},
       {"coinbase", NOVA_EXCHANGE_COINBASE, NOVA_COIN_INST_TYPE_SPOT, "cb"},
-    {"gateio", NOVA_EXCHANGE_GT, NOVA_COIN_INST_TYPE_SPOT, "gt"},
-    {"mexc", NOVA_EXCHANGE_MEXC, NOVA_COIN_INST_TYPE_SPOT, "mexc"},
+      {"gateio", NOVA_EXCHANGE_GT, NOVA_COIN_INST_TYPE_SPOT, "gt"},
+      {"mexc", NOVA_EXCHANGE_MEXC, NOVA_COIN_INST_TYPE_SPOT, "mexc"},
   };
 
   for (auto &ec : exch_configs) {
@@ -432,7 +458,8 @@ bool StrategyRunner::InitProdFeeds() {
     std::string prefix = std::string("Quote.") + ec.section + ".";
     bool enabled = false;
     cfg->GetItemValue(prefix + "enabled", enabled);
-    if (!enabled) continue;
+    if (!enabled)
+      continue;
 
     // 读取 channels (JSON 数组)
     std::vector<std::string> channels;
@@ -440,7 +467,8 @@ bool StrategyRunner::InitProdFeeds() {
     if (cfg->GetItemValue(prefix + "channels", ch_ary) &&
         ch_ary.is<picojson::array>()) {
       for (auto &v : ch_ary.get<picojson::array>()) {
-        if (v.is<std::string>()) channels.push_back(v.get<std::string>());
+        if (v.is<std::string>())
+          channels.push_back(v.get<std::string>());
       }
     }
     if (channels.empty()) {
@@ -455,11 +483,15 @@ bool StrategyRunner::InitProdFeeds() {
     } info;
 
     for (auto &sub : subs) {
-      if (!sub.position) continue;
+      if (!sub.position)
+        continue;
       auto inst_id = sub.position->instrument;
-      if (!inst_id.Valid()) continue;
-      if (inst_id.exchange != ec.exch) continue;
-      if (inst_id.inst_type != ec.inst_type) continue;
+      if (!inst_id.Valid())
+        continue;
+      if (inst_id.exchange != ec.exch)
+        continue;
+      if (inst_id.inst_type != ec.inst_type)
+        continue;
 
       std::string exch_sym = MakeExchangeSymbol(inst_id);
       if (info.symbol_set.insert(exch_sym).second) {
@@ -469,7 +501,8 @@ bool StrategyRunner::InitProdFeeds() {
     }
 
     if (info.symbols.empty()) {
-      INFO_FLOG("[Runner] Quote.{} enabled but no matching instruments", ec.section);
+      INFO_FLOG("[Runner] Quote.{} enabled but no matching instruments",
+                ec.section);
       continue;
     }
 
@@ -491,8 +524,8 @@ bool StrategyRunner::InitProdFeeds() {
     wf->SetChannels(channels);
     wf->SetInstrumentMap(info.mapping);
 
-    INFO_FLOG("[Runner] Prod feed: Quote.{} → {} {} symbols",
-              ec.section, ec.ws_exch, info.symbols.size());
+    INFO_FLOG("[Runner] Prod feed: Quote.{} → {} {} symbols", ec.section,
+              ec.ws_exch, info.symbols.size());
     for (auto &sym : info.symbols) {
       INFO_FLOG("[Runner]   {} -> {}", ec.ws_exch, sym);
     }
@@ -501,7 +534,8 @@ bool StrategyRunner::InitProdFeeds() {
   }
 
   if (feeds_.empty()) {
-    WARNING_LOG("[Runner] No Quote exchange sections enabled, fallback to mock");
+    WARNING_LOG(
+        "[Runner] No Quote exchange sections enabled, fallback to mock");
     auto *wf = new WSFeed();
     wf->SetExchange("binance");
     feeds_.emplace_back(wf);
@@ -569,23 +603,25 @@ void StrategyRunner::Run() {
     // ── 空闲 ──
     t0 = NowNs();
     if (mode_ == "backtest")
-      std::this_thread::yield();      // 回测全速跑
+      std::this_thread::yield(); // 回测全速跑
     else
-      std::this_thread::sleep_for(std::chrono::microseconds(500));  // 实盘省 CPU
+      std::this_thread::sleep_for(std::chrono::microseconds(500)); // 实盘省 CPU
     t_idle += NowNs() - t0;
     ++n_loops;
 
     // 每 10s 打印一次剖析报告
-    if (last_report_ns == 0) last_report_ns = loop_start;
+    if (last_report_ns == 0)
+      last_report_ns = loop_start;
     if (loop_start - last_report_ns > 10'000'000'000ULL) {
       auto ms = [](uint64_t ns) { return ns / 1'000'000ULL; };
       uint64_t total = t_poll + t_onpoll + t_reminder + t_idle;
-      INFO_FLOG("[Profiler] {} loops in 10s | Poll={}ms({:.0f}%) on_poll={}ms({:.0f}%) Reminder={}ms({:.0f}%) Idle={}ms({:.0f}%)",
-                n_loops,
-                ms(t_poll), total > 0 ? t_poll * 100.0 / total : 0,
-                ms(t_onpoll), total > 0 ? t_onpoll * 100.0 / total : 0,
-                ms(t_reminder), total > 0 ? t_reminder * 100.0 / total : 0,
-                ms(t_idle), total > 0 ? t_idle * 100.0 / total : 0);
+      INFO_FLOG(
+          "[Profiler] {} loops in 10s | Poll={}ms({:.0f}%) "
+          "on_poll={}ms({:.0f}%) Reminder={}ms({:.0f}%) Idle={}ms({:.0f}%)",
+          n_loops, ms(t_poll), total > 0 ? t_poll * 100.0 / total : 0,
+          ms(t_onpoll), total > 0 ? t_onpoll * 100.0 / total : 0,
+          ms(t_reminder), total > 0 ? t_reminder * 100.0 / total : 0,
+          ms(t_idle), total > 0 ? t_idle * 100.0 / total : 0);
       t_poll = t_onpoll = t_reminder = t_idle = 0;
       n_loops = 0;
       last_report_ns = loop_start;
@@ -621,6 +657,7 @@ void StrategyRunner::ProcessReminders(uint64_t cur_ns) {
     }
   }
   for (auto &r : due) {
-    if (strategy_) strategy_->on_reminder(r.data, cur_ns);
+    if (strategy_)
+      strategy_->on_reminder(r.data, cur_ns);
   }
 }
