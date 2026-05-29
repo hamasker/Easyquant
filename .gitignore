@@ -32,3 +32,4 @@ python/trade_prob/output/fps/*.json
 config/prod_config.json
 config/mock_config.json
 *.so
+.mcp.json

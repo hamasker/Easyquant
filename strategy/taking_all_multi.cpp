@@ -4,11 +4,9 @@
  *
  * Created by Yurong Chen (gghamasker@gmail.com) on 2025-12-22.
  *****************************************************************************/
-#include "container_util.h"
-#include <chrono>
 #define RYML_SINGLE_HDR_DEFINE_NOW
-#include "common/volume_pairs.h"
 #include "taking_all_multi.h"
+#include "common/volume_pairs.h"
 #include "trade/trade_server.h"
 
 STRATEGY_API_IMPLEMENT(TakingDemo)
@@ -79,8 +77,29 @@ bool TakingDemo::on_init(const Config *cfg) {
       turnover_pairs_.add_id(item.first);
   }
 
-  // 2. top-N 中未订阅的补上 (只订 trade)
-  auto top_pairs = fetch_all_top_pairs(20);
+  // 2. top-N 中未订阅的补上 (只订 trade), 带重试
+  constexpr int kMaxRetries = 5;
+  std::vector<std::string> top_pairs;
+  for (int attempt = 0; attempt < kMaxRetries; ++attempt) {
+    if (attempt > 0) {
+      WARNING_FLOG("[OnInit] turnover fetch retry #{}, waiting 2s...", attempt);
+      std::this_thread::sleep_for(std::chrono::seconds(2));
+    }
+    top_pairs.clear();
+    bool all_ok = true;
+    for (int i = 0; i < 4; ++i) {
+      auto pairs = fetch_top_pairs_for_exch(i, 20);
+      if (pairs.empty()) {
+        WARNING_FLOG("[OnInit] turnover {}: 0 pairs, will retry",
+                     kVolumeExchNames[i]);
+        all_ok = false;
+      } else {
+        top_pairs.insert(top_pairs.end(), pairs.begin(), pairs.end());
+      }
+    }
+    if (all_ok)
+      break;
+  }
   INFO_FLOG("[OnInit] fetch_all_top_pairs({}): {}", top_pairs.size(),
             sum_util::ToString(top_pairs));
   for (auto &pair : turnover_pairs_.filter_new(top_pairs)) {
@@ -252,10 +271,10 @@ void TakingDemo::on_reminder(void *, uint64_t cur_ns) {
   AddReminder(cur_ns + 10'000'000, nullptr); // 10ms 后再次触发
 }
 
-void TakingDemo::on_poll(int64_t /*ts*/) {
+void TakingDemo::on_poll(int64_t ts) {
   if (scheduler_.new_data_count_ > 0) {
     scheduler_.new_data_count_ = 0;
-    do_calculations(global_ts);
+    do_calculations(ts);
   }
 }
 

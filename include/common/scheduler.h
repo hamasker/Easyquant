@@ -102,8 +102,9 @@ struct ModuleScheduler {
   }
 
   inline bool should_fp(int64_t ts) const {
-    return acc_usd_fp >= fp_turnover_usd &&
-           ts - last_fp_ts > fp_interval_min_ns;      // 成交额 + 最小间隔
+    return (acc_usd_fp >= fp_turnover_usd &&
+            ts - last_fp_ts > fp_interval_min_ns) ||
+           ts - last_fp_ts > fp_interval_max_ns;       // 成交额+最小间隔 或 最大间隔兜底
   }
   inline bool should_order(int64_t ts) const {
     return (acc_usd_order >= order_turnover_usd &&

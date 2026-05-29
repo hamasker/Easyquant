@@ -1,9 +1,11 @@
 #include "common/volume_pairs.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <functional>
 #include <regex>
+#include <thread>
 #include <utility>
 
 #include "nlohmann_json/json.hpp"
@@ -138,11 +140,34 @@ std::vector<std::string> fetch_top_n(const VolumeSource &src, int n) {
 
 } // namespace
 
+const char *kVolumeExchNames[] = {"Binance", "OKX", "Gate.io", "Coinbase"};
+
+std::vector<std::string> fetch_top_pairs_for_exch(int exch_idx, int per_exch) {
+  if (exch_idx < 0 || exch_idx >= 4) return {};
+  auto &src = kVolumeSources[exch_idx];
+  std::vector<std::string> result;
+  auto tops = fetch_top_n(src, per_exch);
+  for (auto &sym : tops) {
+    std::string lower = sym;
+    std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+    if (lower.find('_') == std::string::npos) {
+      for (const char *q : {"usdt"}) {
+        if (lower.size() > 4 && lower.substr(lower.size() - 4) == q) {
+          lower = lower.substr(0, lower.size() - 4) + "_" + q;
+          break;
+        }
+      }
+    }
+    result.push_back(lower + "." + src.exch_abbr);
+  }
+  return result;
+}
+
 std::vector<std::string> fetch_all_top_pairs(int per_exch) {
   std::vector<std::string> all;
   for (auto &src : kVolumeSources) {
-    auto tops = fetch_top_n(src, per_exch);
-    for (auto &sym : tops) {
+    auto pairs = fetch_top_n(src, per_exch);
+    for (auto &sym : pairs) {
       std::string lower = sym;
       std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
       if (lower.find('_') == std::string::npos) {
