@@ -219,8 +219,8 @@ void TakingDemo::on_datainfo(const DataInfoManager *datainfo, int32_t di,
     const auto *trade = static_cast<const Trade *>(one.buffer().back());
     global_ts = trade->local_time;
     // 追踪 aim exchange (Kraken) 数据到达时间, 用于断连检测
-    if (position && sum_util::EndsWith(position->instrument.symbol,
-                                       CFG_.Strategy.Stable.aim_exchange))
+    if (position &&
+        sum_util::EndsWith(position->instrument.symbol, CFG_.aim_exchange))
       scheduler_.last_aim_data_ts_ = global_ts;
     // turnover 累加 (O(1) 集合判断)
     if (sum_util::Find(turnover_pairs_.subscribed_str,
@@ -335,9 +335,7 @@ void TakingDemo::process_negative(int64_t ts) {
   }
 }
 
-void TakingDemo::process_fp(int64_t ts) {
-  fpg_->update(ts);
-}
+void TakingDemo::process_fp(int64_t ts) { fpg_->update(ts); }
 
 // ─── 下单: OB档位漂移表 ───
 namespace {
@@ -562,7 +560,7 @@ void TakingDemo::accumulate_turnover(const data::InstrumentComponent &IC,
 void TakingDemo::get_trade_engine() {
   if (engine_aim == nullptr) {
     auto sym = "BTC_NONE";
-    auto exch = GetExchangeFromStr(CFG_.Strategy.Stable.aim_exchange.c_str());
+    auto exch = GetExchangeFromStr(CFG_.aim_exchange.c_str());
     const InstrumentId id_aim = InstrumentId::Create(sym, exch);
     auto *server = GetServer();
     engine_aim =
@@ -579,8 +577,8 @@ void TakingDemo::init_global_variables() {
     volumes_.emplace(c, data::volume_data());
   }
   for (auto &forex : constant::FOREX) {
-    const auto &Cusd_inst = DataProcess::format_main_exchange_usd_pair(
-        forex, CFG_.Strategy.Stable.aim_exchange);
+    const auto &Cusd_inst =
+        DataProcess::format_main_exchange_usd_pair(forex, CFG_.aim_exchange);
     const auto &id_Cusd_inst = InstData_.IM.inststr2id_[Cusd_inst];
     if (sum_util::Find(InstData_.depth_map, id_Cusd_inst))
       CFG_.Strategy.available_forex.push_back(forex);
@@ -601,7 +599,7 @@ void TakingDemo::get_assets() {
   if (CFG_.Strategy.flag_prod) { // * 从交易所或者回测从Setting读取资产
     auto *fund_assets_aim = GetFundAsset(engine_aim);
     INFO_FLOG("[GetAssets]Got balances({}) from {} exchange:",
-              fund_assets_aim->size(), CFG_.Strategy.Stable.aim_exchange);
+              fund_assets_aim->size(), CFG_.aim_exchange);
     for (const auto &entry : *fund_assets_aim)
       INFO_FLOG("[GetAssets]symbol: {}, available: {}, hold: {}",
                 entry.first.c_str(), entry.second->total_asset,
@@ -612,7 +610,7 @@ void TakingDemo::get_assets() {
       auto currency_str = data::get_currency_name(c);
       // ! 每次加新currency时 需要到prod查看获取的symbol名是否一致
       const auto &currency2 = DataProcess::format_main_exchange_none_pair(
-          currency_str, CFG_.Strategy.Stable.aim_exchange);
+          currency_str, CFG_.aim_exchange);
       auto &balance_query = BlcMng_.at(c).balance_query;
       auto &balance_live = BlcMng_.at(c).balance_live;
       auto &balance_default = BlcMng_.at(c).balance_default;
@@ -699,7 +697,7 @@ void TakingDemo::subscribe_instruments(std::string inst_str, bool sub_spot) {
             IC->uni_id);
   // * initilize depth_map
   NOVA_COIN_QUOTE_TYPE depth_type =
-      (sum_util::EndsWith(inst_str, CFG_.Strategy.Stable.aim_exchange))
+      (sum_util::EndsWith(inst_str, CFG_.aim_exchange))
           ? NOVA_COIN_QUOTE_DEPTH_LVN
           : NOVA_COIN_QUOTE_DEPTH;
   InstData_.depth_map[IC_tmp.uni_id] = data::depths_data();
@@ -720,8 +718,7 @@ void TakingDemo::subscribe_instruments(std::string inst_str, bool sub_spot) {
   INFO_FLOG("[SubInst]{} {} subscribed {} (id: {})", type_str, inst_str,
             depth_type == NOVA_COIN_QUOTE_DEPTH_LVN ? "DepthLVN" : "Depth",
             IC->uni_id);
-  if (DataProcess::is_main_exchange(inst_str,
-                                    CFG_.Strategy.Stable.aim_exchange)) {
+  if (DataProcess::is_main_exchange(inst_str, CFG_.aim_exchange)) {
     // * initilize rate_limit / vol_map / order_map
     if (CFG_.Strategy.flag_prod)
       IC->rate_limit = engine_aim->GetRateLimit(inst_str);

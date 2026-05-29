@@ -9,7 +9,8 @@ using DataProcess::weighted_price_bbo;
 using DataProcess::weighted_price_depth;
 constexpr int DepNum5 = 5;
 constexpr int DepNum10 = 10;
-constexpr int64_t NS_5S = 5LL * 1000000000LL; // 5 * 1e9 ns
+constexpr int64_t NS_5S = 5LL * 1000000000LL;   // 5 * 1e9 ns
+constexpr int64_t NS_20S = 20LL * 1000000000LL; // 20 * 1e9 ns
 
 // 定义无效数组常量
 constexpr std::array<double, 2> invalid_array = {-1.0, -1.0};
@@ -478,15 +479,14 @@ bool FairPriceGenerator::update(const int64_t ts) {
   calculate_fp_usdc();
   calculate_fp_usd();
   for (const auto &currency : CFG_.Strategy.Stable.trading_currencies) {
-    if (currency != data::currency::USD && currency != data::currency::USDT &&
-        currency != data::currency::USDC) {
-      const auto &currency_str = data::get_currency_name(currency);
-      if (sum_util::Find(constant::available_forex, currency_str)) {
-        calculate_fp_forex(currency);
-      } else if (sum_util::Find(constant::available_digital, currency_str)) {
-        calculate_fp_digital(currency);
-      }
-    }
+    if (currency == data::currency::USD || currency == data::currency::USDT ||
+        currency == data::currency::USDC)
+      continue;
+    const auto &currency_str = data::get_currency_name(currency);
+    if (sum_util::Find(constant::available_forex, currency_str))
+      calculate_fp_forex(currency);
+    else if (sum_util::Find(constant::available_digital, currency_str))
+      calculate_fp_digital(currency);
   }
   update_fp_insts();
   if (this->fp_update_times < 2999) {
@@ -517,18 +517,18 @@ static int check_path_consistency(double d_mid, double e_mid, double u_mid) {
 
 void FairPriceGenerator::calculate_fp_usdt() {
   // 1. 提取 5 个 depth pair
-  const auto &id_d = id_map.at(DataProcess::format_main_exchange_usd_pair(
-      "usdt", CFG_.Strategy.Stable.aim_exchange));
+  const auto &id_tu = id_map.at(
+      DataProcess::format_main_exchange_usd_pair("usdt", CFG_.aim_exchange));
   const auto &id_te = id_map.at(DataProcess::format_main_exchange_cross_pair(
-      "usdt", "eur", CFG_.Strategy.Stable.aim_exchange));
-  const auto &id_eu = id_map.at(DataProcess::format_main_exchange_usd_pair(
-      "eur", CFG_.Strategy.Stable.aim_exchange));
+      "usdt", "eur", CFG_.aim_exchange));
+  const auto &id_eu = id_map.at(
+      DataProcess::format_main_exchange_usd_pair("eur", CFG_.aim_exchange));
   const auto &id_ct = id_map.at(DataProcess::format_main_exchange_cross_pair(
-      "usdc", "usdt", CFG_.Strategy.Stable.aim_exchange));
-  const auto &id_cu = id_map.at(DataProcess::format_main_exchange_usd_pair(
-      "usdc", CFG_.Strategy.Stable.aim_exchange));
+      "usdc", "usdt", CFG_.aim_exchange));
+  const auto &id_cu = id_map.at(
+      DataProcess::format_main_exchange_usd_pair("usdc", CFG_.aim_exchange));
 
-  const auto &dd = depth_map.at(id_d);
+  const auto &dtu = depth_map.at(id_tu);
   const auto &dte = depth_map.at(id_te);
   const auto &deu = depth_map.at(id_eu);
   const auto &dct = depth_map.at(id_ct);
@@ -537,15 +537,15 @@ void FairPriceGenerator::calculate_fp_usdt() {
   // 数据时效检查
   InstData_.abnormal_status = data::abnormal_status::NORMAL;
   auto stale = [&](const auto &d) {
-    return !d.valid || ts_tmp - d.local_ts > NS_5S;
+    return !d.valid || ts_tmp - d.local_ts > NS_20S;
   };
-  bool sd = stale(dd), ste = stale(dte), seu = stale(deu), sct = stale(dct),
+  bool sd = stale(dtu), ste = stale(dte), seu = stale(deu), sct = stale(dct),
        scu = stale(dcu);
   if (sd || ste || seu || sct || scu) [[unlikely]] {
     WARNING_FLOG(
         "abnormal usdt fp: stale dd={} dte={} deu={} dct={} dcu={} | "
-        "ages dd={:.0f}ms dte={:.0f}ms deu={:.0f}ms dct={:.0f}ms dcu={:.0f}ms",
-        sd, ste, seu, sct, scu, (ts_tmp - dd.local_ts) / 1e6,
+        "ages dtu={:.0f}ms dte={:.0f}ms deu={:.0f}ms dct={:.0f}ms dcu={:.0f}ms",
+        sd, ste, seu, sct, scu, (ts_tmp - dtu.local_ts) / 1e6,
         (ts_tmp - dte.local_ts) / 1e6, (ts_tmp - deu.local_ts) / 1e6,
         (ts_tmp - dct.local_ts) / 1e6, (ts_tmp - dcu.local_ts) / 1e6);
     InstData_.abnormal_status = data::abnormal_status::AIM_EXCH_INVALID;
@@ -556,7 +556,7 @@ void FairPriceGenerator::calculate_fp_usdt() {
   auto mid = [](double b1, double a1, double b2, double a2, auto fn) {
     return (fn(b1, b2) + fn(a1, a2)) * 0.5;
   };
-  double d_mid = mid(dd.bids[0][0], dd.asks[0][0], 0, 0,
+  double d_mid = mid(dtu.bids[0][0], dtu.asks[0][0], 0, 0,
                      [](double p, double) { return p; });
   double e_mid = mid(dte.bids[0][0], dte.asks[0][0], deu.bids[0][0],
                      deu.asks[0][0], [](double a, double b) { return a * b; });
@@ -577,7 +577,7 @@ void FairPriceGenerator::calculate_fp_usdt() {
   bids.reserve(128);
   asks.reserve(128);
   if (mask & 1)
-    append_direct_usdtusd_levels(dd, DepNum10, bids, asks);
+    append_direct_usdtusd_levels(dtu, DepNum10, bids, asks);
   if (mask & 2)
     append_eur_path_levels(dte, deu, DepNum10, DepNum5, bids, asks);
   if (mask & 4)
@@ -603,8 +603,8 @@ void FairPriceGenerator::calculate_fp_usdt() {
   fps_map_[data::currency::USDT].timestamps.add(ts_tmp);
   fps_map_[data::currency::USDT].fps.add(fp);
   fps_map_[data::currency::USDT].vps.add((fp_buy + fp_sell) * 0.5);
-  InstData_.IM.FindByUniId(id_d)->fp_bid = fp[0];
-  InstData_.IM.FindByUniId(id_d)->fp_ask = fp[1];
+  InstData_.IM.FindByUniId(id_tu)->fp_bid = fp[0];
+  InstData_.IM.FindByUniId(id_tu)->fp_ask = fp[1];
 
   if (CFG_.Strategy.Verbose.fp) [[unlikely]]
     DEBUG_FLOG("usdt fp: [{:.6f}, {:.6f}] mask={} d={:.6f} e={:.6f} u={:.6f}",
@@ -790,15 +790,13 @@ void FairPriceGenerator::calculate_fp_usdc() {
   const auto &fp_usdt = fps_map_[data::currency::USDT].fps.get_latest();
   const auto &id_bn_usdcusdt = id_map.at("usdc_usdt.bn");
   const auto &id_cb_usdtusd = id_map.at("usdt_usd.cb");
-  const auto &id_aim_usdcusd =
-      id_map.at(DataProcess::format_main_exchange_usd_pair(
-          "usdc", CFG_.Strategy.Stable.aim_exchange));
+  const auto &id_aim_usdcusd = id_map.at(
+      DataProcess::format_main_exchange_usd_pair("usdc", CFG_.aim_exchange));
   const auto &id_aim_usdceur =
       id_map.at(DataProcess::format_main_exchange_cross_pair(
-          "usdc", "eur", CFG_.Strategy.Stable.aim_exchange));
-  const auto &id_aim_eurusd =
-      id_map.at(DataProcess::format_main_exchange_usd_pair(
-          "eur", CFG_.Strategy.Stable.aim_exchange));
+          "usdc", "eur", CFG_.aim_exchange));
+  const auto &id_aim_eurusd = id_map.at(
+      DataProcess::format_main_exchange_usd_pair("eur", CFG_.aim_exchange));
   auto &bbo_bn_usdcusdt = bbo_map.at(id_bn_usdcusdt);
   auto &depth_bn_usdcusdt = depth_map.at(id_bn_usdcusdt);
   auto &bbo_cb_usdtusd = bbo_map.at(id_cb_usdtusd);
@@ -926,10 +924,9 @@ void FairPriceGenerator::calculate_fp_usdc() {
   } else if (dev_bp > kUsdcWarnBps) {
     WARNING_FLOG("usdc deviation: mid={:.6f} dev={:.1f}bp", mid, dev_bp);
   }
-
   if (CFG_.Strategy.Verbose.fp) [[unlikely]]
-    DEBUG_FLOG("[new]usdc fp_bid: {}, fp_ask: {}, ob_bid: {}, ob_ask: {}",
-               fp_bid, fp_ask, depth_aim_usdcusd.bids[0][0],
+    DEBUG_FLOG("usdc fp_bid: {}, fp_ask: {}, ob_bid: {}, ob_ask: {}", fp[0],
+               fp[1], depth_aim_usdcusd.bids[0][0],
                depth_aim_usdcusd.asks[0][0]);
   const double vp = (fp_bid + fp_ask) * 0.5;
   fps_map_[data::currency::USDC].timestamps.add(this->ts_tmp);
@@ -938,12 +935,6 @@ void FairPriceGenerator::calculate_fp_usdc() {
   auto *IC_usdcusd = InstData_.IM.FindByUniId(id_aim_usdcusd);
   IC_usdcusd->fp_bid = fp[0];
   IC_usdcusd->fp_ask = fp[1];
-  const auto &id_aim_usdcusdt =
-      id_map.at(DataProcess::format_main_exchange_cross_pair(
-          "usdc", "usdt", CFG_.Strategy.Stable.aim_exchange));
-  auto *IC_usdcusdt = InstData_.IM.FindByUniId(id_aim_usdcusdt);
-  IC_usdcusdt->fp_bid = fp[0];
-  IC_usdcusdt->fp_ask = fp[1];
 }
 
 void FairPriceGenerator::calculate_fp_usd() {
@@ -961,14 +952,14 @@ void FairPriceGenerator::calculate_fp_forex(const data::currency &currency) {
   const auto &fp_usdt = fps_map_[data::currency::USDT].fps.get_latest();
   const auto &fp_usdc = fps_map_[data::currency::USDC].fps.get_latest();
   const auto &id_aim_Cusd =
-      id_map.at(DataProcess::format_main_exchange_usd_pair(
-          currency_str, CFG_.Strategy.Stable.aim_exchange));
+      id_map.at(DataProcess::format_main_exchange_usd_pair(currency_str,
+                                                           CFG_.aim_exchange));
   const auto &id_aim_usdtC =
       id_map.at(DataProcess::format_main_exchange_cross_pair(
-          "usdt", currency_str, CFG_.Strategy.Stable.aim_exchange));
+          "usdt", currency_str, CFG_.aim_exchange));
   const auto &id_aim_usdcC =
       id_map.at(DataProcess::format_main_exchange_cross_pair(
-          "usdc", currency_str, CFG_.Strategy.Stable.aim_exchange));
+          "usdc", currency_str, CFG_.aim_exchange));
   auto &depth_aim_Cusd = depth_map.at(id_aim_Cusd);
   auto &depth_aim_usdtC = depth_map.at(id_aim_usdtC);
   auto &depth_aim_usdcC = depth_map.at(id_aim_usdcC);
@@ -1009,7 +1000,7 @@ void FairPriceGenerator::calculate_fp_forex(const data::currency &currency) {
     } else
       ERROR_FLOG("abnormal {} fp calculation!", currency_str);
     if (IC->inst_str == DataProcess::format_main_exchange_usd_pair(
-                            currency_str, CFG_.Strategy.Stable.aim_exchange)) {
+                            currency_str, CFG_.aim_exchange)) {
       fps_map_[currency].timestamps.add(this->ts_tmp);
       // if (CFG_.flag_ib) { // todo
       // const auto &id_ib =
@@ -1068,7 +1059,7 @@ void FairPriceGenerator::calculate_fp_digital(const data::currency &currency) {
   const auto &inst_cb_Cusd =
       DataProcess::format_main_exchange_usd_pair(currency_str, "cb");
   const auto &inst_aim_Cusd = DataProcess::format_main_exchange_usd_pair(
-      currency_str, CFG_.Strategy.Stable.aim_exchange);
+      currency_str, CFG_.aim_exchange);
 
   const auto &id_bn_Cusdt = id_map.at(inst_bn_Cusdt);
   const auto &id_ok_Cusdt = id_map.at(inst_ok_Cusdt);
@@ -1207,8 +1198,8 @@ void FairPriceGenerator::calculate_fp_digital(const data::currency &currency) {
               id_aim_Cusd, depth_cal.PC, this->ts_tmp);
           if (CFG_.Strategy.Verbose.tfi) {
             const std::string inst_str =
-                DataProcess::format_main_exchange_usd_pair(
-                    currency_str, CFG_.Strategy.Stable.aim_exchange);
+                DataProcess::format_main_exchange_usd_pair(currency_str,
+                                                           CFG_.aim_exchange);
             const auto tfi_bn = get_tfi_from_map(InstData_.trade_map,
                                                  id_bn_Cusdt, this->ts_tmp);
             const auto tfi_ok = get_tfi_from_map(InstData_.trade_map,
@@ -1228,7 +1219,7 @@ void FairPriceGenerator::calculate_fp_digital(const data::currency &currency) {
           apply_tfi_scale(fp_tmp[0], fp_tmp[1], tfi_bps);
         }
         const std::string inst_str = DataProcess::format_main_exchange_usd_pair(
-            currency_str, CFG_.Strategy.Stable.aim_exchange);
+            currency_str, CFG_.aim_exchange);
         const double scale = depth_cal.PC.fp_momentum_scale;
         if (scale != 0.0 && depth_cal.wp_prev[0] > 0.0 &&
             depth_cal.wp_prev[1] > 0.0) {
@@ -1236,9 +1227,8 @@ void FairPriceGenerator::calculate_fp_digital(const data::currency &currency) {
           apply_fp_momentum(fp_tmp[0], fp_tmp[1], prev[0], prev[1], scale);
         }
       }
-      if (IC->inst_str ==
-          DataProcess::format_main_exchange_usd_pair(
-              currency_str, CFG_.Strategy.Stable.aim_exchange)) {
+      if (IC->inst_str == DataProcess::format_main_exchange_usd_pair(
+                              currency_str, CFG_.aim_exchange)) {
         fps_map_[currency].timestamps.add(this->ts_tmp);
         fps_map_[currency].fps.add(fp_tmp);
         double vp = (fp_tmp[0] + fp_tmp[1]) * 0.5;
@@ -1510,8 +1500,8 @@ void FairPriceGenerator::update_fp_insts() {
 
     if (sum_util::Find(constant::available_digital, IC.base_str) &&
         IC.quote != data::currency::USD) { // 同一base的所有pair统一预期成交方向
-      auto inst_Cusd_str = fmt::format("{}_usd.{}", IC.base_str,
-                                       CFG_.Strategy.Stable.aim_exchange);
+      auto inst_Cusd_str =
+          fmt::format("{}_usd.{}", IC.base_str, CFG_.aim_exchange);
       const auto &IC_Cusd = InstData_.IM.FindByInstStr(inst_Cusd_str);
       auto &ob_Cusd = depth_map[IC_Cusd->uni_id];
       auto direction_Cusd_bid =

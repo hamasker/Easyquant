@@ -20,6 +20,8 @@ struct Configs {
   TradeConfig Trade;
   QuoteConfig Quote;
   StrategyBlock Strategy;
+
+  std::string aim_exchange;
 };
 
 inline void LoadConfigs(const nova::base::Config *cfg, Configs &c) {
@@ -28,4 +30,6 @@ inline void LoadConfigs(const nova::base::Config *cfg, Configs &c) {
   LoadTradeConfig(cfg, c.Trade);
   LoadQuoteConfig(cfg, c.Quote);
   LoadStrategyBlock(cfg, c.Strategy);
+
+  c.aim_exchange = c.Strategy.Stable.aim_exchange;
 }
