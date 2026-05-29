@@ -31,7 +31,7 @@ const std::vector<std::string> instruments = {
     "usdt_usd_spot.krk",     "usdt_eur_spot.krk",     "eur_usd_spot.krk",
     "usdc_eur_spot.krk",     "usdc_usd_spot.krk",     "usdc_usdt_spot.krk",
     "gbp_usd_spot.krk",      "usdt_gbp_spot.krk",     "usdc_gbp_spot.krk",
-    "eur_usd_cash.idealpro", "gbp_usd_cash.idealpro", "usdc_usd_spot.bn",
+    "eur_usd_cash.idealpro", "gbp_usd_cash.idealpro", "usdc_usdt_spot.bn",
     "usdt_usd_spot.cb",      "btc_usd_spot.krk",      "btc_eur_spot.krk",
     "btc_gbp_spot.krk",      "btc_usdc_spot.krk",     "btc_usdt_spot.krk",
     "btc_usdt_spot.bn",      "btc_usd_spot.cb",       "btc_usdt_spot.ok",

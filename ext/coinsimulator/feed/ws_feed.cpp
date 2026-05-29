@@ -627,6 +627,7 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
         // 合成全档 DEPTH_LVN
         NovaCoinDepthLVN depth{};
         depth.instrument_id = it->second;
+        depth.update_time = local_ns;
         depth.local_ns = local_ns;
         depth.local_time = local_ns;
         int i = 0;
