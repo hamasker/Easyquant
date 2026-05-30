@@ -490,7 +490,7 @@ bool FairPriceGenerator::update(const int64_t ts) {
       calculate_fp_digital(currency);
   }
   update_fp_insts();
-  if (this->fp_update_times < 2999) {
+  if (this->fp_update_times < 299) {
     this->fp_update_times++;
     this->first_cal = false;
     if (CFG_.Strategy.Verbose.fp)
