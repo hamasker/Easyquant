@@ -195,6 +195,23 @@ def encode_trade(ts_ns, inst_id_28, row):
     return header + body
 
 
+def write_sorted_bin(records, out_path, label=""):
+    """Sort records by timestamp and write to output .bin file"""
+    if not records:
+        print(f"  {label}: 0 records, skipped")
+        return
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    records.sort(key=lambda x: x[0])
+    total_bytes = 0
+    with open(out_path, "wb") as f:
+        for _, rec in records:
+            f.write(rec)
+            total_bytes += len(rec)
+    print(f"  {label}: {len(records)} records → {out_path} ({total_bytes / 1024 / 1024:.1f} MB)")
+
+
 def main():
     if len(sys.argv) < 4:
         print(__doc__)
@@ -203,102 +220,43 @@ def main():
     exchange = sys.argv[1]
     symbol = sys.argv[2].upper()
     dates = sys.argv[3:]
+    date_str = dates[0].replace("-", "")
 
     inst_id_28 = symbol_to_inst28(symbol, exchange)
-    out_path = Path(f"/data/bin/backtest_{exchange}_{symbol.lower()}_{dates[0]}.bin")
+
+    # Tardis symbol → inner name for file path (e.g., XBTUSD→btc_usd, BTCUSDT→btcusdt)
+    ex = EXCHANGE_MAP.get(exchange, (exchange, exchange))[1]
+    inner = symbol.lower().replace("-", "")
+    if ex == "krk":
+        inner = inner.replace("xbt", "btc").replace("xdg", "doge")
+
+    # Base output directory: /data/bin/<exchange>/
+    base = Path(f"/data/bin/{exchange}")
 
     import pandas as pd  # ensure pandas available
 
-    CHUNK = 500_000  # records per sorted chunk
-    tmpdir = tempfile.mkdtemp(prefix="btsort_")
-    chunk_files = []
-    chunk = []
-    total_records = 0
+    # ── Collect BBO + Depth from book_snapshot_5 ──
+    bbo_recs = []
+    depth_recs = []
+    trade_recs = []
 
-    def flush_chunk():
-        """Sort current chunk and write to temp file"""
-        nonlocal chunk_files, chunk
-        if not chunk:
-            return
-        chunk.sort(key=lambda x: x[0])
-        tmpf = os.path.join(tmpdir, f"chunk_{len(chunk_files):04d}.bin")
-        with open(tmpf, "wb") as f:
-            for _, rec in chunk:
-                f.write(rec)
-        chunk_files.append(tmpf)
-        chunk.clear()
-
-    # Load book_snapshots → depth + BBO records
-    # Tardis timestamps are in microseconds → convert to nanoseconds (×1000)
     for ts_us, row in load_book_snapshots(exchange, symbol, dates):
         ts = int(ts_us) * 1000
-        chunk.append((ts, encode_bbo(ts, inst_id_28, row)))
-        chunk.append((ts, encode_depth(ts, inst_id_28, row)))
-        total_records += 2
-        if len(chunk) >= CHUNK:
-            flush_chunk()
+        bbo_recs.append((ts, encode_bbo(ts, inst_id_28, row)))
+        depth_recs.append((ts, encode_depth(ts, inst_id_28, row)))
 
-    # Load trades (timestamps also in microseconds)
     for row in load_trades(exchange, symbol, dates):
         ts = int(row["timestamp"]) * 1000
-        chunk.append((ts, encode_trade(ts, inst_id_28, row)))
-        total_records += 1
-        if len(chunk) >= CHUNK:
-            flush_chunk()
+        trade_recs.append((ts, encode_trade(ts, inst_id_28, row)))
 
-    flush_chunk()  # final chunk
-
-    print(f"  Total: {total_records} records in {len(chunk_files)} chunks")
-
-    # Merge sorted chunks → final file
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    total_bytes = 0
-
-    if len(chunk_files) == 1:
-        shutil.move(chunk_files[0], out_path)
-        total_bytes = out_path.stat().st_size
-    else:
-        # Open all chunk files and read their first record
-        readers = []
-        for cf in chunk_files:
-            f = open(cf, "rb")
-            readers.append(f)
-
-        def _read_rec(f):
-            """Read one record: (ts_from_header, raw_bytes) or None"""
-            hdr = f.read(HDR_SIZE)
-            if len(hdr) < HDR_SIZE:
-                return None
-            rec_type = hdr[0]
-            body_sizes = {REC_BBO: BBO_SIZE, REC_DEPTH: DEPTH_SIZE, REC_TRADE: TRADE_SIZE}
-            body_len = body_sizes.get(rec_type, 0)
-            body = f.read(body_len) if body_len else b""
-            if len(body) < body_len:
-                return None
-            raw = hdr + body
-            ts = int(struct.unpack("<q", hdr[1:9])[0])
-            return (ts, raw)
-
-        heap = []
-        for i, f in enumerate(readers):
-            rec = _read_rec(f)
-            if rec:
-                heapq.heappush(heap, (rec[0], i, rec[1]))
-
-        with open(out_path, "wb") as outf:
-            while heap:
-                _, idx, raw = heapq.heappop(heap)
-                outf.write(raw)
-                total_bytes += len(raw)
-                next_rec = _read_rec(readers[idx])
-                if next_rec:
-                    heapq.heappush(heap, (next_rec[0], idx, next_rec[1]))
-
-        for f in readers:
-            f.close()
-
-    shutil.rmtree(tmpdir, ignore_errors=True)
-    print(f"\nDone: {total_records} records → {out_path} ({total_bytes / 1024 / 1024:.1f} MB)")
+    # ── Write to separate files per data_type ──
+    # BBO → <exchange>/bbo/<date>/<inner>.bin
+    write_sorted_bin(bbo_recs, base / "bbo" / date_str / f"{inner}.bin", "BBO")
+    # Depth → <exchange>/depth_lvn/<date>/<inner>.bin (Kraken=LVN) or depth/
+    depth_dir = "depth_lvn" if ex == "krk" else "depth"
+    write_sorted_bin(depth_recs, base / depth_dir / date_str / f"{inner}.bin", depth_dir.upper())
+    # Trade → <exchange>/trade/<date>/<inner>.bin
+    write_sorted_bin(trade_recs, base / "trade" / date_str / f"{inner}.bin", "TRADE")
 
 if __name__ == "__main__":
     main()

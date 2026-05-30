@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstring>
+#include <dirent.h>
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -32,26 +33,121 @@ static constexpr size_t HDR_SIZE = 1 + 8 + 28; // 37
 static constexpr uint8_t REC_BBO   = 1;
 static constexpr uint8_t REC_DEPTH = 2;
 static constexpr uint8_t REC_TRADE = 3;
-static constexpr size_t BBO_BODY   = 40;  // bid_px(8)+bid_qty(8)+ask_px(8)+ask_qty(8)+local_ns(8)
+static constexpr size_t BBO_BODY   = 40;
 static constexpr size_t DEPTH_BODY = 170;
 static constexpr size_t TRADE_BODY = 25;
 
+const std::array<size_t, 4> BODY_SIZE = {0, BBO_BODY, DEPTH_BODY, TRADE_BODY};
+
 } // namespace
+
+// ─── FileReader ───────────────────────────────────────────────────
+
+void MmapBacktestFeed::FileReader::close() {
+  if (mmap_addr && mmap_addr != MAP_FAILED) {
+    munmap(mmap_addr, mmap_size);
+  }
+  if (fd >= 0) {
+    ::close(fd);
+  }
+  mmap_addr = nullptr; mmap_size = 0;
+  cursor = nullptr; end = nullptr;
+  fd = -1; next_ts = 0; next_type = 0;
+}
+
+bool MmapBacktestFeed::FileReader::open(const std::string &p) {
+  path = p;
+  fd = ::open(p.c_str(), O_RDONLY);
+  if (fd < 0) return false;
+
+  struct stat st;
+  fstat(fd, &st);
+  mmap_size = st.st_size;
+  if (mmap_size == 0) { ::close(fd); fd = -1; return false; }
+
+  mmap_addr = mmap(nullptr, mmap_size, PROT_READ, MAP_PRIVATE, fd, 0);
+  if (mmap_addr == MAP_FAILED) {
+    ::close(fd); fd = -1; mmap_addr = nullptr; mmap_size = 0;
+    return false;
+  }
+
+  cursor = static_cast<const char *>(mmap_addr);
+  end = cursor + mmap_size;
+  return advance(); // 预读第一条记录的时间戳
+}
+
+bool MmapBacktestFeed::FileReader::advance() {
+  while (cursor + HDR_SIZE <= end) {
+    next_type = *reinterpret_cast<const uint8_t *>(cursor);
+    next_ts = *reinterpret_cast<const int64_t *>(cursor + 1);
+
+    size_t body_len = (next_type >= 1 && next_type <= 3) ? BODY_SIZE[next_type] : 0;
+    if (body_len == 0) {
+      cursor += HDR_SIZE; // skip unknown
+      continue;
+    }
+    cursor += HDR_SIZE + body_len;
+    return true; // 预读到一条有效 record
+  }
+  // 文件耗尽
+  next_ts = INT64_MAX;
+  next_type = 0;
+  return false;
+}
+
+// ─── MmapBacktestFeed ─────────────────────────────────────────────
 
 MmapBacktestFeed::MmapBacktestFeed() { running_ = true; }
 
-MmapBacktestFeed::~MmapBacktestFeed() {
-  Stop();
-  CloseFile();
+MmapBacktestFeed::~MmapBacktestFeed() { Stop(); }
+
+int64_t MmapBacktestFeed::now_ns() { return NowNs(); }
+
+void MmapBacktestFeed::scan_directory(const std::string &root) {
+  std::vector<std::string> paths;
+  // 只扫描 <root>/<exchange>/backtest/<symbol>/<date>.bin
+  std::function<void(const std::string &, int)> dfs =
+      [&](const std::string &dir, int depth) {
+        if (depth > 5) return;
+        DIR *d = opendir(dir.c_str());
+        if (!d) return;
+        struct dirent *ent;
+        while ((ent = readdir(d)) != nullptr) {
+          if (ent->d_name[0] == '.') continue;
+          std::string full = dir + "/" + ent->d_name;
+          if (ent->d_type == DT_DIR) {
+            dfs(full, depth + 1);
+          } else if (ent->d_type == DT_REG || ent->d_type == DT_UNKNOWN) {
+            std::string name(ent->d_name);
+            if (name.size() > 4 && name.substr(name.size() - 4) == ".bin")
+              paths.push_back(full);
+          }
+        }
+        closedir(d);
+      };
+  dfs(root, 0);
+
+  // 按路径排序保证确定性
+  std::sort(paths.begin(), paths.end());
+
+  for (auto &p : paths) {
+    FileReader r;
+    if (r.open(p)) {
+      readers_.push_back(std::move(r));
+    }
+  }
+  active_count_ = readers_.size();
+  INFO_FLOG("[MmapFeed] Scanned {} .bin files under {}, {} opened",
+            paths.size(), root, active_count_);
 }
 
 bool MmapBacktestFeed::Initialize(const nova::base::Config &cfg) {
   (void)cfg;
 
-  // 读取时间范围 (纳秒)
   std::string begin_str, end_str;
   cfg.GetItemValue("Quote.backtest.begin_time", begin_str);
   cfg.GetItemValue("Quote.backtest.end_time", end_str);
+
   if (!begin_str.empty()) {
     std::string ts = begin_str;
     ts.erase(std::remove(ts.begin(), ts.end(), '.'), ts.end());
@@ -71,139 +167,102 @@ bool MmapBacktestFeed::Initialize(const nova::base::Config &cfg) {
     }
   }
 
-  if (file_paths_.empty()) {
-    ERROR_LOG("[MmapFeed] No data files");
+  if (data_root_.empty()) {
+    // 默认扫描 /data/bin/ 下所有 .bin
+    data_root_ = "/data/bin";
+  }
+
+  scan_directory(data_root_);
+
+  if (active_count_ == 0) {
+    ERROR_LOG("[MmapFeed] No .bin files found under {}", data_root_);
     return false;
   }
 
-  return LoadFile();
-}
-
-bool MmapBacktestFeed::LoadFile() {
-  CloseFile();
-
-  if (file_idx_ >= file_paths_.size()) {
-    INFO_LOG("[MmapFeed] All files played");
-    return false;
-  }
-
-  current_path_ = file_paths_[file_idx_++];
-  fd_ = open(current_path_.c_str(), O_RDONLY);
-  if (fd_ < 0) {
-    ERROR_FLOG("[MmapFeed] Cannot open: {}", current_path_);
-    return false;
-  }
-
-  struct stat st;
-  fstat(fd_, &st);
-  mmap_size_ = st.st_size;
-  if (mmap_size_ == 0) {
-    close(fd_);
-    fd_ = -1;
-    return false;
-  }
-
-  mmap_addr_ = mmap(nullptr, mmap_size_, PROT_READ, MAP_PRIVATE, fd_, 0);
-  if (mmap_addr_ == MAP_FAILED) {
-    ERROR_FLOG("[MmapFeed] mmap failed for {}", current_path_);
-    close(fd_);
-    fd_ = -1;
-    mmap_addr_ = nullptr;
-    mmap_size_ = 0;
-    return false;
-  }
-
-  cursor_ = static_cast<const char *>(mmap_addr_);
-  end_ = cursor_ + mmap_size_;
-
-  INFO_FLOG("[MmapFeed] Loaded {} ({} MB)", current_path_,
-            mmap_size_ / 1024 / 1024);
   return true;
 }
 
-void MmapBacktestFeed::CloseFile() {
-  if (mmap_addr_ && mmap_addr_ != MAP_FAILED) {
-    munmap(mmap_addr_, mmap_size_);
+const char *MmapBacktestFeed::next_record() {
+  // 找到 active files 中时间戳最小的
+  int best = -1;
+  int64_t best_ts = INT64_MAX;
+
+  for (size_t i = 0; i < readers_.size(); ++i) {
+    if (readers_[i].next_ts < best_ts) {
+      best_ts = readers_[i].next_ts;
+      best = static_cast<int>(i);
+    }
   }
-  if (fd_ >= 0) {
-    close(fd_);
+
+  if (best < 0 || best_ts == INT64_MAX) return nullptr;
+
+  // 时间过滤
+  if (begin_ns_ > 0 && best_ts < begin_ns_) {
+    readers_[best].advance();
+    if (readers_[best].next_ts == INT64_MAX) --active_count_;
+    return next_record(); // 递归跳过
   }
-  mmap_addr_ = nullptr;
-  mmap_size_ = 0;
-  cursor_ = nullptr;
-  end_ = nullptr;
-  fd_ = -1;
+  if (end_ns_ > 0 && best_ts > end_ns_) {
+    readers_[best].advance();
+    if (readers_[best].next_ts == INT64_MAX) --active_count_;
+    return next_record();
+  }
+
+  // 速度控制
+  if (speed_ > 0) {
+    if (start_data_ns_ == 0) {
+      start_real_ns_ = NowNs();
+      start_data_ns_ = best_ts;
+    } else {
+      int64_t elapsed_real = NowNs() - start_real_ns_;
+      int64_t elapsed_data = static_cast<int64_t>((best_ts - start_data_ns_) / speed_);
+      if (elapsed_data > elapsed_real) {
+        std::this_thread::sleep_for(
+            std::chrono::nanoseconds(elapsed_data - elapsed_real));
+      }
+    }
+  }
+
+  // 返回 record 指针 (指回该文件 cursor 的上一条记录)
+  // advance() 已经把 cursor 推进到了下一条, 需要回退
+  FileReader &r = readers_[best];
+  size_t body_len = BODY_SIZE[r.next_type];
+  const char *rec = r.cursor - HDR_SIZE - body_len;
+
+  // 推进当前文件
+  r.advance();
+  if (r.next_ts == INT64_MAX) --active_count_;
+
+  return rec;
 }
 
 bool MmapBacktestFeed::Poll() {
   if (!running_) return false;
-
-  // 批量处理: 每次 Poll 处理一批 record (最多 1000 条)
-  int batch = 0;
-  const char *rec;
-  while (batch < 1000 && (rec = NextRecord()) != nullptr) {
-    DispatchRecord(rec);
-    ++batch;
-  }
-
-  if (batch == 0) {
-    // 尝试加载下一个文件
-    if (LoadFile()) {
-      return Poll();
-    }
+  if (active_count_ == 0) {
     INFO_LOG("[MmapFeed] Playback complete");
     return false;
   }
 
-  return true;
-}
-
-const char *MmapBacktestFeed::NextRecord() {
-  while (cursor_ < end_) {
-    auto *rec = cursor_;
-    uint8_t type = *reinterpret_cast<const uint8_t *>(rec);
-    int64_t ts_ns = *reinterpret_cast<const int64_t *>(rec + 1);
-
-    size_t rec_size = HDR_SIZE;
-    if (type == REC_BBO)
-      rec_size += BBO_BODY;
-    else if (type == REC_DEPTH)
-      rec_size += DEPTH_BODY;
-    else if (type == REC_TRADE)
-      rec_size += TRADE_BODY;
-    else {
-      cursor_ += HDR_SIZE; // skip unknown
-      continue;
-    }
-
-    cursor_ += rec_size;
-
-    // 时间过滤
-    if (begin_ns_ > 0 && ts_ns < begin_ns_) continue;
-    if (end_ns_ > 0 && ts_ns > end_ns_) continue;
-
-    // 速度控制
-    if (speed_ > 0) {
-      if (start_data_ns_ == 0) {
-        start_real_ns_ = NowNs();
-        start_data_ns_ = ts_ns;
-      } else {
-        int64_t elapsed_real = NowNs() - start_real_ns_;
-        int64_t elapsed_data =
-            static_cast<int64_t>((ts_ns - start_data_ns_) / speed_);
-        if (elapsed_data > elapsed_real) {
-          std::this_thread::sleep_for(
-              std::chrono::nanoseconds(elapsed_data - elapsed_real));
-        }
-      }
-    }
-
-    return rec;
+  int batch = 0;
+  const char *rec;
+  while (batch < 1000 && (rec = next_record()) != nullptr) {
+    dispatch_record(rec);
+    ++batch;
   }
-  return nullptr;
+
+  return active_count_ > 0;
 }
 
-void MmapBacktestFeed::DispatchRecord(const char *rec) {
+void MmapBacktestFeed::Stop() {
+  running_ = false;
+  for (auto &r : readers_) r.close();
+  readers_.clear();
+  active_count_ = 0;
+}
+
+// ─── dispatch_record (same logic as before) ─────────────────────
+
+void MmapBacktestFeed::dispatch_record(const char *rec) {
   auto &state = MockServiceState::Instance();
   auto *di_mgr = state.data_info_mgr;
   if (!di_mgr) return;
@@ -213,7 +272,6 @@ void MmapBacktestFeed::DispatchRecord(const char *rec) {
   const char *inst_bytes = rec + 9;
   int64_t local_ns = ts_ns;
 
-  // 构造 InstrumentId
   InstrumentId inst_id{};
   char sym_buf[29]{};
   memcpy(sym_buf, inst_bytes, 28);
@@ -225,7 +283,6 @@ void MmapBacktestFeed::DispatchRecord(const char *rec) {
     for (size_t i = 0; i < state.subs.size(); ++i) {
       if (state.subs[i].quote_type != qtype) continue;
       if (!state.subs[i].position) continue;
-      // 只分发给 instrument symbol 匹配的订阅者 (backtest 最关键的一步)
       if (strncmp(state.subs[i].position->instrument.symbol,
                   inst_id.symbol, sizeof(inst_id.symbol)) != 0)
         continue;
@@ -234,7 +291,7 @@ void MmapBacktestFeed::DispatchRecord(const char *rec) {
         state.strategy->on_datainfo(di_mgr, static_cast<int32_t>(i),
                                      state.subs[i].position);
       }
-      return; // 匹配到就停止
+      return;
     }
   };
 
@@ -279,8 +336,7 @@ void MmapBacktestFeed::DispatchRecord(const char *rec) {
       depth.ask[i].price = asks_px[i];
       depth.ask[i].qty = asks_qty[i];
     }
-    // 先派发 DepthLVN (Kraken aim exchange), 再派发 Depth (其他所)
-    // 顺序重要: DEPTH_LVN 必须在前，否则 DEPTH 会先更新 server_ts 挡住后续更新
+    // DepthLVN 优先 (Kraken aim exchange), 再 Depth
     NovaCoinDepthLVN depth_lvn{};
     depth_lvn.instrument_id = inst_id;
     depth_lvn.update_time = ts_ns;
@@ -314,7 +370,5 @@ void MmapBacktestFeed::DispatchRecord(const char *rec) {
     dispatch(NOVA_COIN_QUOTE_TRADE, &trade);
   }
 }
-
-void MmapBacktestFeed::Stop() { running_ = false; }
 
 END_NOVA_NAMESPACE(trade)

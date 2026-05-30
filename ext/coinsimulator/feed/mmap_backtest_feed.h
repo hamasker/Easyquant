@@ -7,14 +7,17 @@
 #include <atomic>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 BEGIN_NOVA_NAMESPACE(trade)
 
 /**
- * MmapBacktestFeed — 内存映射二进制回测 Feed。
+ * MmapBacktestFeed — 多文件 mmap 归并回测 Feed。
  *
- * 直接 mmap .bin 文件, 零拷贝遍历 record。
- * 比 CSV 解析快 100 倍以上。
+ * 扫描目录下所有 .bin 文件, 按时间戳 k-way merge 播放。
+ * 零拷贝遍历 record, 比 CSV 解析快 100 倍以上。
+ *
+ * 目录格式: <root>/<exchange>/backtest/<symbol>/<date>.bin
  *
  * 二进制格式 (每条 record):
  *   [type:1B][ts_ns:8B][inst_id:28B][data:N*8B]
@@ -31,7 +34,7 @@ public:
   bool Poll() override;
   void Stop() override;
 
-  void AddDataFile(const std::string &path) { file_paths_.push_back(path); }
+  void SetDataRoot(const std::string &path) { data_root_ = path; }
   void SetSpeed(double speed) { speed_ = speed; }
   void SetTimeRange(int64_t begin_ns, int64_t end_ns) {
     begin_ns_ = begin_ns;
@@ -39,30 +42,34 @@ public:
   }
 
 private:
-  bool LoadFile();
-  void CloseFile();
-  const char *NextRecord();
-  void DispatchRecord(const char *rec);
+  struct FileReader {
+    std::string path;
+    int fd = -1;
+    void *mmap_addr = nullptr;
+    size_t mmap_size = 0;
+    const char *cursor = nullptr;
+    const char *end = nullptr;
+    int64_t next_ts = 0;   // 缓存下一条 record 的时间戳
+    uint8_t next_type = 0;
 
-  // mmap 相关
-  std::string current_path_;
-  int fd_ = -1;
-  void *mmap_addr_ = nullptr;
-  size_t mmap_size_ = 0;
-  const char *cursor_ = nullptr;
-  const char *end_ = nullptr;
+    void close();
+    bool open(const std::string &p);
+    bool advance();          // 读取当前 cursor 的 ts, 推进 cursor
+  };
 
-  // 播放控制
-  std::vector<std::string> file_paths_;
-  size_t file_idx_ = 0;
-  double speed_ = 0; // 0 = 全速
+  void scan_directory(const std::string &root);
+  const char *next_record();
+  void dispatch_record(const char *rec);
+  static int64_t now_ns();
+
+  std::string data_root_;
+  std::vector<FileReader> readers_;
+  size_t active_count_ = 0;
+  double speed_ = 0;
   int64_t begin_ns_ = 0;
   int64_t end_ns_ = 0;
-
-  // 时间控制
   int64_t start_real_ns_ = 0;
   int64_t start_data_ns_ = 0;
-
   std::atomic<bool> running_{false};
 };
 

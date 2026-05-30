@@ -398,16 +398,11 @@ bool StrategyRunner::InitFeed() {
   // backtest: mmap 二进制文件回放
   if (mode_ == "backtest") {
     auto *bf = new MmapBacktestFeed();
-    // 从 -d 参数或 Quote.backtest 读取数据源
+    // 从 -d 参数或默认 /data 扫描所有 .bin
     if (!data_dir_.empty()) {
-      bf->AddDataFile(data_dir_);
+      bf->SetDataRoot(data_dir_);
     } else {
-      const auto *cfg = GetMockServer()->config();
-      picojson::value input_dirs;
-      if (cfg->GetItemValue("Quote.backtest.input_dirs", input_dirs)) {
-        // 从 input_dirs 展开路径 (简化: 用 -d 传具体文件)
-        WARNING_LOG("[Runner] Use -d <file.bin> for backtest data");
-      }
+      bf->SetDataRoot("/data");
     }
     bf->SetSpeed(0);
     feeds_.emplace_back(bf);
