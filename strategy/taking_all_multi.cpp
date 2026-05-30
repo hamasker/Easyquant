@@ -255,6 +255,11 @@ void TakingDemo::on_datainfo(const DataInfoManager *datainfo, int32_t di,
     INFO_FLOG("[OnStrategy]trigger on_datainfo success {}",
               position->instrument.symbol);
     scheduler_.flag_first = false;
+    // 回测模式: 用数据时间戳重置 scheduler 时钟 (init 时用了系统时间)
+    scheduler_.last_fp_ts = global_ts;
+    scheduler_.last_order_ts = global_ts;
+    scheduler_.last_negative_ts = global_ts;
+    scheduler_.last_disconnect_ts = global_ts;
     AddReminder(global_ts + 10'000'000, nullptr);
     // 在第一次数据触发时再次设置日志级别, 确保新创建的线程都使用统一级别
     if (!CFG_.Server.Log.file_level_real.empty() && config_reloader_) {
@@ -284,6 +289,9 @@ void TakingDemo::do_calculations(int64_t current_ts) {
   // * 检测数据完备
   if (!scheduler_.flag_data_ready)
     return;
+  // 回测模式下 global_ts 由 on_datainfo 设为数据时间戳, 保留不覆盖
+  if (global_ts > 0)
+    current_ts = global_ts;
   InstData_.global_ts = current_ts;
   // * 检测断连 (含 aim exchange 30s 无数据自动触发)
   if (scheduler_.should_disconnect(current_ts)) {

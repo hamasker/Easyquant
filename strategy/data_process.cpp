@@ -58,12 +58,17 @@ bool fetch_data(const nova::quote::DataInfo &one,
   auto &id_map = InstData_.IM.inststr2id_;
   std::string inst_str;
   int64_t ts = 0;
+  if (one.buffer().empty()) return true;  // 跳过不匹配的 instrument，不阻塞 flag_data_ready
   if (quote_type == NOVA_COIN_QUOTE_DEPTH) {
     const auto &data = *static_cast<const Depth *>(one.buffer().back());
     inst_str = data.instrument_id.symbol;
     ts = data.local_time;
-    auto id = id_map.at(inst_str);
-    auto &depth_map = InstData_.depth_map[id];
+    auto it = id_map.find(inst_str);
+    if (it == id_map.end()) return true;  // 跳过不匹配的 instrument，不阻塞 flag_data_ready
+    auto id = it->second;
+    auto dp_it = InstData_.depth_map.find(id);
+    if (dp_it == InstData_.depth_map.end()) return true;  // 跳过不匹配的 instrument，不阻塞 flag_data_ready
+    auto &depth_map = dp_it->second;
     if (CFG_.Strategy.Verbose.ob)
       DEBUG_FLOG("[Ob] depth {} bid0={:.4f} ask0={:.4f}", inst_str,
                  data.bid[0].price, data.ask[0].price);
@@ -73,8 +78,12 @@ bool fetch_data(const nova::quote::DataInfo &one,
     const auto &data = *static_cast<const DepthLVN *>(one.buffer().back());
     inst_str = data.instrument_id.symbol;
     ts = data.local_time;
-    auto id = id_map.at(inst_str);
-    auto &depth_map = InstData_.depth_map[id];
+    auto it = id_map.find(inst_str);
+    if (it == id_map.end()) return true;  // 跳过不匹配的 instrument，不阻塞 flag_data_ready
+    auto id = it->second;
+    auto dp_it = InstData_.depth_map.find(id);
+    if (dp_it == InstData_.depth_map.end()) return true;  // 跳过不匹配的 instrument，不阻塞 flag_data_ready
+    auto &depth_map = dp_it->second;
     if (CFG_.Strategy.Verbose.ob)
       DEBUG_FLOG("[Ob] depth_lvn {} bid0={:.4f} ask0={:.4f}", inst_str,
                  data.bid[0].price, data.ask[0].price);
@@ -83,8 +92,12 @@ bool fetch_data(const nova::quote::DataInfo &one,
     const auto &data = *static_cast<const BBO *>(one.buffer().back());
     inst_str = data.instrument_id.symbol;
     ts = data.local_time;
-    auto id = id_map.at(inst_str);
-    auto &bbo_map = InstData_.bbo_map[id];
+    auto it = id_map.find(inst_str);
+    if (it == id_map.end()) return true;  // 跳过不匹配的 instrument，不阻塞 flag_data_ready
+    auto id = it->second;
+    auto bb_it = InstData_.bbo_map.find(id);
+    if (bb_it == InstData_.bbo_map.end()) return true;  // 跳过不匹配的 instrument，不阻塞 flag_data_ready
+    auto &bbo_map = bb_it->second;
     if (CFG_.Strategy.Verbose.ob)
       DEBUG_FLOG("[Ob] bbo {} bid={:.4f} ask={:.4f}", inst_str, data.bid_price,
                  data.ask_price);
@@ -105,11 +118,11 @@ bool fetch_data(const nova::quote::DataInfo &one,
     ts = data.local_time;
     auto it = id_map.find(inst_str);
     if (it == id_map.end())
-      return flag_data_ready ? true : false;
+      return true;  // 跳过不匹配的 instrument，不阻塞 flag_data_ready
     auto id = it->second;
     // 先判断是否在 trade_map 中, 是才记录
     if (!InstData_.trade_map.count(id))
-      return flag_data_ready ? true : false;
+      return true;  // 跳过不匹配的 instrument，不阻塞 flag_data_ready
     InstData_.trade_map[id].add_trade(data.local_time, data.side, data.price,
                                       data.qty);
     // 日志放在 depth/bbo 判断前面, 确保 turnover-only inst 也能打印
@@ -121,7 +134,7 @@ bool fetch_data(const nova::quote::DataInfo &one,
     if (!InstData_.depth_map.count(id) && !InstData_.bbo_map.count(id)) {
       if (pair_push_cnt)
         (*pair_push_cnt)[inst_str]++;
-      return flag_data_ready ? true : false;
+      return true;  // 跳过不匹配的 instrument，不阻塞 flag_data_ready
     }
     if (InstData_.depth_map.count(id) && InstData_.bbo_map.count(id)) {
       auto &depth_map = InstData_.depth_map[id];

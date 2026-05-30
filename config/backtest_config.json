@@ -1,7 +1,7 @@
 {
     "Server": {
         "Log": {
-            "path": "/home/baser/Working/MX/Relaxquant/log/backtest",
+            "path": "/home/baser/Working/MX/Easyquant/log/backtest.log",
             "file_level": "TRACE",
             "file_level_real": "DEBUG",
             "screen_level": "ERROR",
@@ -39,8 +39,8 @@
     },
     "Quote": {
         "backtest": {
-            "begin_time": "20251202.00:00:00",
-            "end_time": "20251202.23:59:59",
+            "begin_time": "1773964800",
+            "end_time": "1774051200",
             "input_dirs": [
                 {
                     "path": "/data/bin/",

@@ -124,7 +124,7 @@ QUOTES = ["usdt", "usdc", "busd", "usd", "eur", "gbp", "btc", "eth", "sol", "xrp
 
 def symbol_to_inst28(symbol, exchange):
     """Convert exchange raw symbol → C++ InstrumentId char[28] internal format
-    e.g., BTC-USD.cb → btc_usd_spot.cb, BTCUSDT.bn → btc_usdt_spot.bn"""
+    InstrumentId::Create 对 SPOT 不追加 _spot, 最终格式为 base_quote.exchange"""
     ex = EXCHANGE_MAP.get(exchange, (exchange, exchange))[1]
     sym = symbol.lower().replace("/", "_").replace("-", "_")
 
@@ -134,23 +134,16 @@ def symbol_to_inst28(symbol, exchange):
     if ex == "ok":
         sym = sym.replace("-", "_")
 
-    # 确保有 _ 分隔 base/quote
+    # 确保有 _ 分隔 base/quote (Binance 无分隔符, e.g., "btcusdt"→"btc_usdt")
     if "_" not in sym:
         for q in QUOTES:
             if sym.endswith(q) and len(sym) > len(q):
                 sym = sym[:-len(q)] + "_" + q
                 break
 
-    # 追加 _spot 品种类型 (C++ InstrumentId 格式要求)
-    if "_spot" not in sym:
-        parts = sym.split(".")
-        base = parts[0]
-        ext = parts[1] if len(parts) > 1 else ex
-        if "_" in base:
-            sym = base + "_spot." + ext
-        else:
-            sym = sym + "_spot." + ext
-    elif "." not in sym:
+    # SPOT 类型不加 _spot (与 C++ InstrumentId::Create 一致)
+    # 最终格式: base_quote.exchange (e.g., btc_usd.krk)
+    if "." not in sym:
         sym = sym + "." + ex
 
     return sym.encode("ascii").ljust(28, b"\x00")[:28]

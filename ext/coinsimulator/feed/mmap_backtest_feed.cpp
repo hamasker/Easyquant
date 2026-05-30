@@ -38,7 +38,7 @@ static constexpr size_t TRADE_BODY = 25;
 
 } // namespace
 
-MmapBacktestFeed::MmapBacktestFeed() {}
+MmapBacktestFeed::MmapBacktestFeed() { running_ = true; }
 
 MmapBacktestFeed::~MmapBacktestFeed() {
   Stop();
@@ -223,14 +223,18 @@ void MmapBacktestFeed::DispatchRecord(const char *rec) {
 
   auto dispatch = [&](NOVA_COIN_QUOTE_TYPE qtype, const void *ptr) {
     for (size_t i = 0; i < state.subs.size(); ++i) {
-      if (state.subs[i].quote_type == qtype) {
-        di_mgr->Push(i, ptr, local_ns);
-        if (state.subs[i].trigger && state.strategy) {
-          state.strategy->on_datainfo(di_mgr, static_cast<int32_t>(i),
-                                       state.subs[i].position);
-        }
-        return;
+      if (state.subs[i].quote_type != qtype) continue;
+      if (!state.subs[i].position) continue;
+      // 只分发给 instrument symbol 匹配的订阅者 (backtest 最关键的一步)
+      if (strncmp(state.subs[i].position->instrument.symbol,
+                  inst_id.symbol, sizeof(inst_id.symbol)) != 0)
+        continue;
+      di_mgr->Push(i, ptr, local_ns);
+      if (state.subs[i].trigger && state.strategy) {
+        state.strategy->on_datainfo(di_mgr, static_cast<int32_t>(i),
+                                     state.subs[i].position);
       }
+      return; // 匹配到就停止
     }
   };
 
@@ -275,6 +279,22 @@ void MmapBacktestFeed::DispatchRecord(const char *rec) {
       depth.ask[i].price = asks_px[i];
       depth.ask[i].qty = asks_qty[i];
     }
+    // 先派发 DepthLVN (Kraken aim exchange), 再派发 Depth (其他所)
+    // 顺序重要: DEPTH_LVN 必须在前，否则 DEPTH 会先更新 server_ts 挡住后续更新
+    NovaCoinDepthLVN depth_lvn{};
+    depth_lvn.instrument_id = inst_id;
+    depth_lvn.update_time = ts_ns;
+    depth_lvn.local_time = body_local_ns;
+    depth_lvn.local_ns = body_local_ns;
+    depth_lvn.ob_level = ob_level;
+    int lvn_max = static_cast<int>(NovaCoinDepthLVN::MAX_PRICE_LEVEL);
+    for (int i = 0; i < ob_level && i < lvn_max; ++i) {
+      depth_lvn.bid[i].price = bids_px[i];
+      depth_lvn.bid[i].qty = bids_qty[i];
+      depth_lvn.ask[i].price = asks_px[i];
+      depth_lvn.ask[i].qty = asks_qty[i];
+    }
+    dispatch(NOVA_COIN_QUOTE_DEPTH_LVN, &depth_lvn);
     dispatch(NOVA_COIN_QUOTE_DEPTH, &depth);
   } else if (type == REC_TRADE) {
     NovaCoinTrade trade{};

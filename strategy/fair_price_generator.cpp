@@ -475,7 +475,8 @@ struct UsdtFpPerfStats {
 } // namespace
 
 bool FairPriceGenerator::update(const int64_t ts) {
-  this->ts_tmp = ts;
+  // 优先使用数据时间戳 (回测兼容, mock 下 global_ts ≈ ts 无影响)
+  this->ts_tmp = (InstData_.global_ts > 0) ? InstData_.global_ts : ts;
   calculate_fp_usdt();
   calculate_fp_usdc();
   calculate_fp_usd();
@@ -788,6 +789,8 @@ calculate_weighted_price(data::depths_data &depth, const PairConfig &PC,
 } // namespace
 
 void FairPriceGenerator::calculate_fp_usdc() {
+  if (fps_map_[data::currency::USDT].fps.is_empty())
+    return;
   const auto &fp_usdt = fps_map_[data::currency::USDT].fps.get_latest();
   const auto &id_bn_usdcusdt = id_map.at("usdc_usdt.bn");
   const auto &id_cb_usdtusd = id_map.at("usdt_usd.cb");
@@ -1053,6 +1056,8 @@ inline digital_fp::Quote2 make_q2(const std::array<double, 2> &wp, uint64_t ts,
 }
 
 void FairPriceGenerator::calculate_fp_digital(const data::currency &currency) {
+  if (fps_map_[data::currency::USDT].fps.is_empty())
+    return;
   const auto &currency_str = data::get_currency_name(currency);
   const auto &fp_usdt = fps_map_[data::currency::USDT].fps.get_latest();
   const auto &inst_bn_Cusdt =
