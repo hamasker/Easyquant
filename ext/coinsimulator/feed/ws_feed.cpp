@@ -696,6 +696,7 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
           bbo.bid_qty = std::stod(tk.value("best_bid_quantity", "0"));
           bbo.ask_price = std::stod(tk.value("best_ask", "0"));
           bbo.ask_qty = std::stod(tk.value("best_ask_quantity", "0"));
+          bbo.update_time = local_ns;
           bbo.local_ns = local_ns;
           dispatch(NOVA_COIN_QUOTE_BBO, &bbo, sizeof(bbo));
         }
@@ -736,6 +737,7 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
           bbo.instrument_id = inst_id;
           bbo.bid_price = bids.begin()->first;
           bbo.ask_price = asks.begin()->first;
+          bbo.update_time = local_ns;
           bbo.local_ns = local_ns;
           dispatch(NOVA_COIN_QUOTE_BBO, &bbo, sizeof(bbo));
         }
