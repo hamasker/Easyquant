@@ -1,0 +1,21 @@
+{
+  "sharedPrompts": [
+    ".claude/agents/wechat-reply.md"
+  ],
+  "agents": {
+    "eq": {
+      "wechatAgentId": "eq",
+      "mcpServer": "wechat-eq",
+      "systemPrompt": ".claude/agents/eq.system.md",
+      "settings": ".claude/settings.wechat-eq.json",
+      "description": "本地 Easyquant 开发 (WSL)"
+    },
+    "tk": {
+      "wechatAgentId": "tk",
+      "mcpServer": "wechat-tk",
+      "systemPrompt": ".claude/agents/tk.system.md",
+      "settings": ".claude/settings.wechat-tk.json",
+      "description": "东京服务器 ssh tokyo /opt/Easyquant"
+    }
+  }
+}

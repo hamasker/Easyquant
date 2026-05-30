@@ -1,0 +1,22 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "mcp__wechat-tk__wechat_send",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 /home/baser/Working/MX/Easyquant/scripts/hooks/wechat-send-footer.py",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  },
+  "permissions": {
+    "allow": [
+      "mcp__wechat-tk__wechat_send",
+      "mcp__wechat-tk__wechat_get_status"
+    ]
+  }
+}

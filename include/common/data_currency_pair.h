@@ -490,11 +490,11 @@ inline currency_pair str_to_currency_pair(const std::string &name, exchange e) {
     return str_to_currency_pair(s);
   case exchange::KRAKEN:
     s = name;
-    // XBT/USDT
+    // XBT/USDT → btc/usdt
     sum_util::StrLower(s);
     sum_util::StrReplace(s, "xbt", "btc");
     sum_util::StrReplace(s, "xdg", "doge");
-    s.erase(std::remove(s.begin(), s.end(), '/'), s.end());
+    // keep the "/" — currency_pair_names uses "base/quote" format
     return str_to_currency_pair(s);
   default:
     return str_to_currency_pair(name);

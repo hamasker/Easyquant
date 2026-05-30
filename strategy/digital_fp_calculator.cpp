@@ -3,7 +3,7 @@
 namespace digital_fp {
 
 static inline bool wp_ok(const std::array<double, 2> &wp) {
-  return (wp[0] > 0.0) && (wp[1] > 0.0) && (wp[0] < wp[1]);
+  return (wp[0] > 0.0) && (wp[1] > 0.0) && (wp[0] <= wp[1]);
 }
 
 static inline double clampd(double x, double lo, double hi) {

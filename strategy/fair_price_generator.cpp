@@ -1165,7 +1165,7 @@ void FairPriceGenerator::calculate_fp_digital(const data::currency &currency) {
 
       digital_fp::Quote2 aim =
           make_q2(wp_depth_aim, depth_aim_Cusd.local_ts, median);
-      // 如果你愿意，也可以选更“新鲜”的aim
+      // 如果你愿意，也可以选更"新鲜"的aim
       // wp：depth无效就用bbo，或比较local_ts选最新
 
       std::array<digital_fp::Ex2, 3> leads;
@@ -1191,7 +1191,7 @@ void FairPriceGenerator::calculate_fp_digital(const data::currency &currency) {
           aim, leads, this->ts_tmp, pp, fps_map_.at(currency).digital_state,
           false);
       if (!res.ok)
-        return;
+        continue;
 
       auto fp_tmp = res.fp;
       {
@@ -1427,7 +1427,7 @@ void FairPriceGenerator::calculate_fp_digital(const data::currency &currency) {
 void FairPriceGenerator::update_fp_insts() {
   // 你可以在这里放一个统一的 Params（也可以从 CFG_ 读）
   digital_fp::Params p;
-  // 关键：我们只用两个“exchange”(kraken_internal + synthetic)，第三个空掉
+  // 关键：我们只用两个"exchange"(kraken_internal + synthetic)，第三个空掉
   p.ex_w = {0.2, 0.2, 0.0};
   // 其它参数按你已有默认/配置即可
   // p.kappa_m / p.rho_z / p.gamma_z / p.alpha_* ... 按你现在那套 10ms/10s 配
@@ -1470,7 +1470,7 @@ void FairPriceGenerator::update_fp_insts() {
     // const uint64_t ts_krk_depth =
     //     (ob.local_ts > 0) ? (uint64_t)ob.local_ts : (uint64_t)this->ts_tmp;
 
-    // // ===== 3) 组装成“两条 lead 通道”喂给 digital_fp =====
+    // // ===== 3) 组装成"两条 lead 通道"喂给 digital_fp =====
     // // digital_fp::Quote2 aim_q = make_q2(wp_aim, ts_aim);
     // digital_fp::Quote2 aim_q = make_q2(wp_syn, ts_syn);
 
