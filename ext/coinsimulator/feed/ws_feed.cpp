@@ -65,10 +65,20 @@ std::string ExtractSymbol(const std::string &exchange,
   }
   if (exchange == "coinbase" || exchange == "cb") {
     if (data.contains("product_id")) return data["product_id"].get<std::string>();
-    // Advanced Trade: 从 events[0].product_id 提取
+    // Advanced Trade: events 数组
     if (data.contains("events") && data["events"].is_array() &&
-        !data["events"].empty() && data["events"][0].contains("product_id")) {
-      return data["events"][0]["product_id"].get<std::string>();
+        !data["events"].empty()) {
+      const auto &evt = data["events"][0];
+      // level2 snapshot/update: events[0].product_id
+      if (evt.contains("product_id")) return evt["product_id"].get<std::string>();
+      // ticker: events[0].tickers[0].product_id
+      if (evt.contains("tickers") && evt["tickers"].is_array() &&
+          !evt["tickers"].empty())
+        return evt["tickers"][0].value("product_id", "");
+      // market_trades: events[0].trades[0].product_id
+      if (evt.contains("trades") && evt["trades"].is_array() &&
+          !evt["trades"].empty())
+        return evt["trades"][0].value("product_id", "");
     }
     return "";
   }
@@ -157,11 +167,13 @@ public:
       api_->Send(sub.dump());
       INFO_FLOG("[WSFeed] Subscribed to {} okx channels", args.size());
     } else if (exchange_ == "coinbase" || exchange_ == "cb") {
-      // Exchange WS: 一次订阅所有频道
-      nlohmann::json sub{{"type", "subscribe"},
-                         {"product_ids", feed_.symbols()},
-                         {"channels", feed_.channels()}};
-      api_->Send(sub.dump());
+      // Advanced Trade WS: 按频道分开订阅
+      for (auto &ch : feed_.channels()) {
+        nlohmann::json sub{{"type", "subscribe"},
+                           {"channel", ch},
+                           {"product_ids", feed_.symbols()}};
+        api_->Send(sub.dump());
+      }
       INFO_FLOG("[WSFeed] Subscribed to {} coinbase channels", feed_.channels().size());
     } else if (exchange_ == "gateio" || exchange_ == "gt") {
       static int gate_id = 0;
@@ -305,9 +317,9 @@ MapChannels(const std::string &exchange,
       else if (ch == "trade") out.push_back("trades");
       else out.push_back(ch);
     } else if (exchange == "coinbase" || exchange == "cb") {
-      if (ch == "bbo") out.push_back("ticker");       // ticker 推送 BBO
-      else if (ch == "depth") out.push_back("level2"); // 实时订单簿 (已公开, 无需认证)
-      else if (ch == "trade") out.push_back("matches"); // Exchange WS: matches 推送逐笔成交
+      if (ch == "bbo") out.push_back("ticker");
+      else if (ch == "depth") out.push_back("level2");
+      else if (ch == "trade") out.push_back("market_trades");
       else out.push_back(ch);
     } else if (exchange == "gateio" || exchange == "gt") {
       // 新 JSON-RPC: bbo → depth(limit=1), trade → trades
@@ -351,7 +363,7 @@ bool WSFeed::Initialize(const nova::base::Config &cfg) {
   } else if (exchange_ == "okx" || exchange_ == "ok") {
     ws_url_ = "wss://ws.okx.com:8443/ws/v5/public";
   } else if (exchange_ == "coinbase" || exchange_ == "cb") {
-    ws_url_ = "wss://ws-feed.exchange.coinbase.com";  // Exchange WS (公开, 无需认证)
+    ws_url_ = "wss://advanced-trade-ws.coinbase.com";  // Advanced Trade WS (公开, 无需认证)
   } else if (exchange_ == "gateio" || exchange_ == "gt") {
     ws_url_ = "wss://ws.gateio.ws/v4/ws";
   } else if (exchange_ == "mexc") {
@@ -508,10 +520,12 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
     }
     if (data.contains("method")) return;
   }
-  // 跳过 Coinbase 订阅确认 / 心跳
-  if ((exchange == "cb" || exchange == "coinbase") &&
-      data.value("type", "") == "subscriptions")
-    return;
+  // 跳过 Coinbase Advanced Trade 订阅确认 / 心跳
+  if ((exchange == "cb" || exchange == "coinbase")) {
+    std::string cb_chan = data.value("channel", "");
+    if (cb_chan == "subscriptions" || cb_chan == "heartbeats")
+      return;
+  }
 
   last_data_ns_ = NowNs(); // 更新心跳时间
 
@@ -655,84 +669,124 @@ void WSFeed::ProcessRawMessage(const std::string &exchange,
     return;
   }
 
-  // Coinbase Exchange WS: {"type":"ticker"/"match"/"snapshot"/"l2update",...}
+  // Coinbase Advanced Trade WS: {"channel":"ticker"/"level2"/"market_trades","events":[...]}
   if (exchange == "cb" || exchange == "coinbase") {
-    std::string etype = data.value("type", "");
-    std::string pair = data.value("product_id", "");
-    if (pair.empty()) return;
-
-    // match / last_match → trade
-    if ((etype == "match" || etype == "last_match") && inst_id.Valid()) {
-      NovaCoinTrade tr{};
-      tr.instrument_id = inst_id;
-      tr.price = std::stod(data.value("price", "0"));
-      tr.qty = std::stod(data.value("size", "0"));
-      tr.side = (data.value("side", "") == "buy") ? NOVA_SIDE_BUY : NOVA_SIDE_SELL;
-      tr.local_time = local_ns;
-      tr.local_ns = local_ns;
-      dispatch(NOVA_COIN_QUOTE_TRADE, &tr, sizeof(tr));
+    std::string channel = data.value("channel", "");
+    // heartbeats / subscriptions 已在上层过滤, 这里再兜底
+    if (channel == "heartbeats" || channel == "subscriptions")
       return;
-    }
-
-    // ticker → BBO
-    if (etype == "ticker" && inst_id.Valid()) {
-      NovaCoinBBO bbo{};
-      bbo.instrument_id = inst_id;
-      bbo.bid_price = std::stod(data.value("best_bid", "0"));
-      bbo.bid_qty = 0;
-      bbo.ask_price = std::stod(data.value("best_ask", "0"));
-      bbo.ask_qty = 0;
-      bbo.local_ns = local_ns;
-      dispatch(NOVA_COIN_QUOTE_BBO, &bbo, sizeof(bbo));
+    if (!data.contains("events") || !data["events"].is_array() ||
+        data["events"].empty())
       return;
-    }
 
-    // snapshot / l2update → 维护本地簿 + BBO dispatch
-    if (etype == "snapshot" || etype == "l2update") {
-      auto &[bids, asks] = cb_book_[pair];
-      if (etype == "snapshot") { bids.clear(); asks.clear(); }
-
-      if (etype == "snapshot") {
-        // snapshot: bids/asks 分别的二维数组 [price, qty]
-        auto apply_side = [&](const nlohmann::json &arr, bool is_bid) {
-          for (auto &v : arr) {
-            if (!v.is_array() || v.size() < 2) continue;
-            double px = std::stod(v[0].is_string() ? v[0].get<std::string>() : std::to_string(v[0].get<double>()));
-            double qty = std::stod(v[1].is_string() ? v[1].get<std::string>() : std::to_string(v[1].get<double>()));
-            if (qty <= 0) { if (is_bid) bids.erase(px); else asks.erase(px); }
-            else { if (is_bid) bids[px] = qty; else asks[px] = qty; }
-          }
-        };
-        if (data.contains("bids")) apply_side(data["bids"], true);
-        if (data.contains("asks")) apply_side(data["asks"], false);
-      } else {
-        // l2update: changes 是三维数组 [side, price, qty]
-        for (auto &v : data["changes"]) {
-          if (!v.is_array() || v.size() < 3) continue;
-          std::string side = v[0].is_string() ? v[0].get<std::string>() : "";
-          double px = std::stod(v[1].is_string() ? v[1].get<std::string>() : std::to_string(v[1].get<double>()));
-          double qty = std::stod(v[2].is_string() ? v[2].get<std::string>() : std::to_string(v[2].get<double>()));
-          if (side == "buy") { if (qty<=0) bids.erase(px); else bids[px]=qty; }
-          else if (side == "sell") { if (qty<=0) asks.erase(px); else asks[px]=qty; }
+    for (const auto &evt : data["events"]) {
+      // --- ticker → BBO ---
+      if (channel == "ticker" && evt.contains("tickers") &&
+          evt["tickers"].is_array()) {
+        for (const auto &tk : evt["tickers"]) {
+          std::string prod = tk.value("product_id", "");
+          if (prod.empty()) continue;
+          auto it = symbol_to_inst_.find(prod);
+          if (it == symbol_to_inst_.end()) continue;
+          inst_id = it->second;
+          if (!inst_id.Valid()) continue;
+          NovaCoinBBO bbo{};
+          bbo.instrument_id = inst_id;
+          bbo.bid_price = std::stod(tk.value("best_bid", "0"));
+          bbo.bid_qty = std::stod(tk.value("best_bid_quantity", "0"));
+          bbo.ask_price = std::stod(tk.value("best_ask", "0"));
+          bbo.ask_qty = std::stod(tk.value("best_ask_quantity", "0"));
+          bbo.local_ns = local_ns;
+          dispatch(NOVA_COIN_QUOTE_BBO, &bbo, sizeof(bbo));
         }
+        continue;
       }
 
-      // 保留 25 档
-      constexpr int kMax = 25;
-      while ((int)bids.size() > kMax) bids.erase(std::prev(bids.end()));
-      while ((int)asks.size() > kMax) asks.erase(std::prev(asks.end()));
-      if (!bids.empty() && !asks.empty() && inst_id.Valid()) {
-        NovaCoinBBO bbo{};
-        bbo.instrument_id = inst_id;
-        bbo.bid_price = bids.begin()->first;
-        bbo.ask_price = asks.begin()->first;
-        bbo.local_ns = local_ns;
-        dispatch(NOVA_COIN_QUOTE_BBO, &bbo, sizeof(bbo));
+      // --- level2 → 维护本地簿 + 合成 BBO + 分派 DepthLVN ---
+      if (channel == "level2") {
+        std::string prod = evt.value("product_id", "");
+        std::string etype = evt.value("type", "");
+        if (prod.empty() || !evt.contains("updates")) continue;
+        auto it = symbol_to_inst_.find(prod);
+        if (it == symbol_to_inst_.end()) continue;
+        inst_id = it->second;
+
+        auto &[bids, asks] = cb_book_[prod];
+        if (etype == "snapshot") { bids.clear(); asks.clear(); }
+
+        for (const auto &u : evt["updates"]) {
+          std::string side = u.value("side", "");
+          double px = std::stod(u.value("price_level", "0"));
+          double qty = std::stod(u.value("new_quantity", "0"));
+          if (side == "bid") {
+            if (qty <= 0) bids.erase(px); else bids[px] = qty;
+          } else if (side == "offer") {
+            if (qty <= 0) asks.erase(px); else asks[px] = qty;
+          }
+        }
+
+        // 保留 25 档
+        constexpr int kMax = 25;
+        while ((int)bids.size() > kMax) bids.erase(std::prev(bids.end()));
+        while ((int)asks.size() > kMax) asks.erase(std::prev(asks.end()));
+
+        // 合成 BBO 并分派
+        if (!bids.empty() && !asks.empty() && inst_id.Valid()) {
+          NovaCoinBBO bbo{};
+          bbo.instrument_id = inst_id;
+          bbo.bid_price = bids.begin()->first;
+          bbo.ask_price = asks.begin()->first;
+          bbo.local_ns = local_ns;
+          dispatch(NOVA_COIN_QUOTE_BBO, &bbo, sizeof(bbo));
+        }
+
+        // 分派 DepthLVN (全档)
+        if (inst_id.Valid() && (!bids.empty() || !asks.empty())) {
+          NovaCoinDepthLVN depth{};
+          depth.instrument_id = inst_id;
+          int i = 0;
+          for (auto &[px, qty] : bids) {
+            if (i >= 25) break;
+            depth.bid[i].price = px;
+            depth.bid[i].qty = qty;
+            ++i;
+          }
+          i = 0;
+          for (auto &[px, qty] : asks) {
+            if (i >= 25) break;
+            depth.ask[i].price = px;
+            depth.ask[i].qty = qty;
+            ++i;
+          }
+          depth.local_time = local_ns;
+          dispatch(NOVA_COIN_QUOTE_DEPTH_LVN, &depth, sizeof(depth));
+        }
+        continue;
       }
-      return;
+
+      // --- market_trades → Trade ---
+      if (channel == "market_trades" && evt.contains("trades") &&
+          evt["trades"].is_array()) {
+        for (const auto &tr : evt["trades"]) {
+          std::string prod = tr.value("product_id", "");
+          if (prod.empty()) continue;
+          auto it = symbol_to_inst_.find(prod);
+          if (it == symbol_to_inst_.end()) continue;
+          inst_id = it->second;
+          if (!inst_id.Valid()) continue;
+          NovaCoinTrade trade{};
+          trade.instrument_id = inst_id;
+          trade.price = std::stod(tr.value("price", "0"));
+          trade.qty = std::stod(tr.value("size", "0"));
+          std::string s = tr.value("side", "");
+          trade.side = (s == "BUY") ? NOVA_SIDE_BUY : NOVA_SIDE_SELL;
+          trade.local_time = local_ns;
+          trade.local_ns = local_ns;
+          dispatch(NOVA_COIN_QUOTE_TRADE, &trade, sizeof(trade));
+        }
+        continue;
+      }
     }
-
-    // 其他 Coinbase 消息 (subscriptions, heartbeat 等)
     return;
   }
 
