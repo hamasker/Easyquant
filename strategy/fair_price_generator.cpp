@@ -1091,19 +1091,22 @@ void FairPriceGenerator::calculate_fp_digital(const data::currency &currency) {
   const bool cb_valid = is_external_data_valid(
       bbo_cb_Cusd, depth_cb_Cusd, this->ts_tmp, NS_20S); // Coinbase ticker
 
-  // 根据有效性计算 wp，如果无效则返回 invalid_array
+  // 根据有效性计算 wp — BBO 必须自身有效才参与计算
   const auto wp_bn_Cusdt_bbo_tmp =
-      bn_valid ? calculate_weighted_price(bbo_bn_Cusdt, &fp_usdt) // todo
-               : invalid_array;
+      (bn_valid && bbo_bn_Cusdt.valid)
+          ? calculate_weighted_price(bbo_bn_Cusdt, &fp_usdt)
+          : invalid_array;
   const std::array<double, 2> wp_bbo_bn = {wp_bn_Cusdt_bbo_tmp[0] * fp_usdt[0],
                                            wp_bn_Cusdt_bbo_tmp[1] * fp_usdt[1]};
   const auto wp_ok_Cusdt_bbo_tmp =
-      ok_valid ? calculate_weighted_price(bbo_ok_Cusdt, &fp_usdt)
-               : invalid_array;
+      (ok_valid && bbo_ok_Cusdt.valid)
+          ? calculate_weighted_price(bbo_ok_Cusdt, &fp_usdt)
+          : invalid_array;
   const std::array<double, 2> wp_bbo_ok = {wp_ok_Cusdt_bbo_tmp[0] * fp_usdt[0],
                                            wp_ok_Cusdt_bbo_tmp[1] * fp_usdt[1]};
   const auto wp_bbo_cb =
-      cb_valid ? calculate_weighted_price(bbo_cb_Cusd) : invalid_array;
+      (cb_valid && bbo_cb_Cusd.valid)
+          ? calculate_weighted_price(bbo_cb_Cusd) : invalid_array;
 
   const auto &relative_trading_ids =
       DataProcess::get_relative_trading_ids(InstData_, currency);
@@ -1113,22 +1116,24 @@ void FairPriceGenerator::calculate_fp_digital(const data::currency &currency) {
         sum_util::Find(CFG_.Strategy.Stable.digital_currencies, IC->quote)) {
       auto &depth_cal = depth_map.at(id);
       const auto wp_bn_Cusdt_depth_tmp =
-          bn_valid ? calculate_weighted_price(depth_bn_Cusdt, depth_cal.PC,
-                                              true, &fp_usdt)
-                   : invalid_array;
+          (bn_valid && depth_bn_Cusdt.valid)
+              ? calculate_weighted_price(depth_bn_Cusdt, depth_cal.PC, true,
+                                         &fp_usdt)
+              : invalid_array;
       const std::array<double, 2> wp_depth_bn = {
           wp_bn_Cusdt_depth_tmp[0] * fp_usdt[0],
           wp_bn_Cusdt_depth_tmp[1] * fp_usdt[1]};
       const auto wp_ok_Cusdt_depth_tmp =
-          ok_valid ? calculate_weighted_price(depth_ok_Cusdt, depth_cal.PC,
-                                              true, &fp_usdt)
-                   : invalid_array;
+          (ok_valid && depth_ok_Cusdt.valid)
+              ? calculate_weighted_price(depth_ok_Cusdt, depth_cal.PC, true,
+                                         &fp_usdt)
+              : invalid_array;
       const std::array<double, 2> wp_depth_ok = {
           wp_ok_Cusdt_depth_tmp[0] * fp_usdt[0],
           wp_ok_Cusdt_depth_tmp[1] * fp_usdt[1]};
 
       const auto wp_depth_cb =
-          cb_valid
+          (cb_valid && depth_cb_Cusd.valid)
               ? calculate_weighted_price(depth_cb_Cusd, depth_cal.PC, false)
               : invalid_array;
 
