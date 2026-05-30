@@ -11,6 +11,7 @@ constexpr int DepNum5 = 5;
 constexpr int DepNum10 = 10;
 constexpr int64_t NS_5S = 5LL * 1000000000LL;   // 5 * 1e9 ns
 constexpr int64_t NS_20S = 20LL * 1000000000LL; // 20 * 1e9 ns
+constexpr int64_t NS_30S = 30LL * 1000000000LL; // 30 * 1e9 ns
 
 // 定义无效数组常量
 constexpr std::array<double, 2> invalid_array = {-1.0, -1.0};
@@ -805,14 +806,14 @@ void FairPriceGenerator::calculate_fp_usdc() {
   auto &depth_aim_usdceur = depth_map.at(id_aim_usdceur);
   const auto &depth_aim_eurusd = depth_map.at(id_aim_eurusd);
   const auto &bd_aim_usdcusd = extract_bbo_or_depth_data(
-      data::bbo_data(), depth_aim_usdcusd, this->ts_tmp, NS_5S);
+      data::bbo_data(), depth_aim_usdcusd, this->ts_tmp, NS_30S);
   const auto &bd_aim_usdceur = extract_bbo_or_depth_data(
-      data::bbo_data(), depth_aim_usdceur, this->ts_tmp, NS_5S);
+      data::bbo_data(), depth_aim_usdceur, this->ts_tmp, NS_30S);
 
   // 检查 AIM 数据有效性
-  if (!is_depth_valid(depth_aim_usdcusd, this->ts_tmp, NS_5S) ||
-      !is_depth_valid(depth_aim_usdceur, this->ts_tmp, NS_5S) ||
-      !is_depth_valid(depth_aim_eurusd, this->ts_tmp, NS_5S)) {
+  if (!is_depth_valid(depth_aim_usdcusd, this->ts_tmp, NS_30S) ||
+      !is_depth_valid(depth_aim_usdceur, this->ts_tmp, NS_30S) ||
+      !is_depth_valid(depth_aim_eurusd, this->ts_tmp, NS_30S)) {
     ERROR_FLOG(
         "abnormal usdc fp calculation: invalid aim data! depth_aim_usdcusd={}, "
         "depth_aim_usdceur={}, depth_aim_eurusd={}, this->ts_tmp={}, "
@@ -826,10 +827,10 @@ void FairPriceGenerator::calculate_fp_usdc() {
   }
   // 检查外部数据有效性并设置异常状态
   const bool external_bn_valid = is_external_data_valid(
-      bbo_bn_usdcusdt, depth_bn_usdcusdt, this->ts_tmp, NS_5S);
+      bbo_bn_usdcusdt, depth_bn_usdcusdt, this->ts_tmp, NS_30S);
   // Coinbase 用 ticker (定期快照), 更新间隔 > 5s, 用更长阈值
   const bool external_cb_valid = is_external_data_valid(
-      bbo_cb_usdtusd, depth_cb_usdtusd, this->ts_tmp, NS_20S);
+      bbo_cb_usdtusd, depth_cb_usdtusd, this->ts_tmp, NS_30S);
 
   if (!external_bn_valid || !external_cb_valid) {
     WARNING_FLOG("abnormal usdc fp calculation: invalid external data! "
@@ -867,9 +868,10 @@ void FairPriceGenerator::calculate_fp_usdc() {
   if (InstData_.abnormal_status == data::abnormal_status::NORMAL) {
     // 提取外部数据
     const auto bn_data = extract_bbo_or_depth_data(
-        bbo_bn_usdcusdt, depth_bn_usdcusdt, this->ts_tmp, NS_5S);
+        bbo_bn_usdcusdt, depth_bn_usdcusdt, this->ts_tmp, NS_30S);
     const auto cb_data = extract_bbo_or_depth_data(
-        bbo_cb_usdtusd, depth_cb_usdtusd, this->ts_tmp, NS_20S); // Coinbase ticker 更新慢
+        bbo_cb_usdtusd, depth_cb_usdtusd, this->ts_tmp,
+        NS_20S); // Coinbase ticker 更新慢
     // 计算加权价格
     const auto &wps_bn_usdcusdt =
         calculate_weighted_price(bn_data, &depth_bn_usdcusdt, &fp_usdt);
@@ -913,8 +915,8 @@ void FairPriceGenerator::calculate_fp_usdc() {
   }
 
   // USDC 锚定检测: 利用 Circle 1:1 赎回机制做安全校验
-  static constexpr double kUsdcWarnBps = 10.0;   // 低于此值不告警
-  static constexpr double kUsdcHardBps = 10.0;   // Circle 1:1 赎回安全边界
+  static constexpr double kUsdcWarnBps = 10.0; // 低于此值不告警
+  static constexpr double kUsdcHardBps = 10.0; // Circle 1:1 赎回安全边界
   double mid = (fp[0] + fp[1]) * 0.5;
   double dev_bp = std::abs(mid - 1.0) * 10000.0;
   if (dev_bp > kUsdcHardBps) [[unlikely]] {
@@ -1081,8 +1083,8 @@ void FairPriceGenerator::calculate_fp_digital(const data::currency &currency) {
       is_external_data_valid(bbo_bn_Cusdt, depth_bn_Cusdt, this->ts_tmp, NS_5S);
   const bool ok_valid =
       is_external_data_valid(bbo_ok_Cusdt, depth_ok_Cusdt, this->ts_tmp, NS_5S);
-  const bool cb_valid =
-      is_external_data_valid(bbo_cb_Cusd, depth_cb_Cusd, this->ts_tmp, NS_20S); // Coinbase ticker
+  const bool cb_valid = is_external_data_valid(
+      bbo_cb_Cusd, depth_cb_Cusd, this->ts_tmp, NS_20S); // Coinbase ticker
 
   // 根据有效性计算 wp，如果无效则返回 invalid_array
   const auto wp_bn_Cusdt_bbo_tmp =
