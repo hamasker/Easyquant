@@ -219,8 +219,9 @@ void TakingDemo::on_datainfo(const DataInfoManager *datainfo, int32_t di,
   // if (CFG_.Strategy.Verbose.ob)
   //   DEBUG_FLOG("[VerboseOb] on_datainfo di={} qtype={}", di, quote_type);
   // if (quote_type == NOVA_COIN_QUOTE_TRADE && ) {
-  scheduler_.flag_data_ready =
-      DataProcess::fetch_data(one, InstData_, scheduler_.flag_data_ready, CFG_);
+  bool fetch_ok = DataProcess::fetch_data(one, InstData_, scheduler_.flag_data_ready, CFG_);
+  if (fetch_ok)
+    scheduler_.flag_data_ready = true; // 一旦就绪，绝不回退
   // 更新 global_ts
   if (quote_type == NOVA_COIN_QUOTE_BBO) {
     const auto &data = *static_cast<const BBO *>(one.buffer().back());

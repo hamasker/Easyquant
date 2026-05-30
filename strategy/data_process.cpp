@@ -104,11 +104,11 @@ bool fetch_data(const nova::quote::DataInfo &one,
     ts = data.local_time;
     auto it = id_map.find(inst_str);
     if (it == id_map.end())
-      return false;
+      return flag_data_ready ? true : false;
     auto id = it->second;
     // 先判断是否在 trade_map 中, 是才记录
     if (!InstData_.trade_map.count(id))
-      return false;
+      return flag_data_ready ? true : false;
     InstData_.trade_map[id].add_trade(data.local_time, data.side, data.price,
                                       data.qty);
     // 日志放在 depth/bbo 判断前面, 确保 turnover-only inst 也能打印
@@ -116,9 +116,9 @@ bool fetch_data(const nova::quote::DataInfo &one,
       DEBUG_FLOG("[Ob] trade {} side={} price={:.4f} qty={:.6f}", inst_str,
                  data.side == NOVA_SIDE_BUY ? "BUY" : "SELL", data.price,
                  data.qty);
-    // turnover-only inst 没有 depth/bbo, 跳过后续更新
+    // turnover-only inst 没有 depth/bbo, 跳过后续更新，但 trade 数据已记录
     if (!InstData_.depth_map.count(id) && !InstData_.bbo_map.count(id))
-      return false;
+      return flag_data_ready ? true : false;
     if (InstData_.depth_map.count(id) && InstData_.bbo_map.count(id)) {
       auto &depth_map = InstData_.depth_map[id];
       auto &bbo_map = InstData_.bbo_map[id];

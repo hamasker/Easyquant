@@ -106,8 +106,8 @@ do_calculations(ts):
 | OKX (ok) | `bbo` | BBO | `bbo-tbt` | tick 级最优价 |
 | | `depth` | Depth | `books5` | 5档深度 |
 | | `trade` | Trade | `trades` | 逐笔成交 |
-| Coinbase (cb) | `bbo` | BBO | `ticker` | 定期快照 (**`level2` 需 API 认证**) |
-| | `depth` | - | `level2` | **需认证, 不可用** |
+| Coinbase (cb) | `bbo` | BBO | `ticker` | 事件驱动, bid/ask 变化时推送 |
+| | `depth` | DepthLVN | `level2` | 实时订单簿 snapshot+l2update, 公开可用 |
 | | `trade` | Trade | `matches` | 逐笔成交 (含 `last_match` 快照) |
 | Gate.io (gt) | `bbo` | BBO | `depth` | limit=1 |
 | | `trade` | Trade | `trades` | |
@@ -122,7 +122,7 @@ do_calculations(ts):
 | Binance swap | `bbo` | fstream.binance.com |
 | Kraken | `depth`, `trade` | ws.kraken.com/v2 |
 | OKX | `bbo`, `trade` | ws.okx.com:8443/ws/v5/public |
-| Coinbase | `bbo`, `trade` | ws-feed.exchange.coinbase.com |
+| Coinbase | `bbo`, `depth`, `trade` | ws-feed.exchange.coinbase.com |
 | Gate.io | 未启用 | ws.gateio.ws/v4/ws |
 | Mexc | 未启用 | wbs-api.mexc.com/ws |
 

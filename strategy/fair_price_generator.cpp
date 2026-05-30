@@ -827,8 +827,9 @@ void FairPriceGenerator::calculate_fp_usdc() {
   // 检查外部数据有效性并设置异常状态
   const bool external_bn_valid = is_external_data_valid(
       bbo_bn_usdcusdt, depth_bn_usdcusdt, this->ts_tmp, NS_5S);
+  // Coinbase 用 ticker (定期快照), 更新间隔 > 5s, 用更长阈值
   const bool external_cb_valid = is_external_data_valid(
-      bbo_cb_usdtusd, depth_cb_usdtusd, this->ts_tmp, NS_5S);
+      bbo_cb_usdtusd, depth_cb_usdtusd, this->ts_tmp, NS_20S);
 
   if (!external_bn_valid || !external_cb_valid) {
     WARNING_FLOG("abnormal usdc fp calculation: invalid external data! "
@@ -868,7 +869,7 @@ void FairPriceGenerator::calculate_fp_usdc() {
     const auto bn_data = extract_bbo_or_depth_data(
         bbo_bn_usdcusdt, depth_bn_usdcusdt, this->ts_tmp, NS_5S);
     const auto cb_data = extract_bbo_or_depth_data(
-        bbo_cb_usdtusd, depth_cb_usdtusd, this->ts_tmp, NS_5S);
+        bbo_cb_usdtusd, depth_cb_usdtusd, this->ts_tmp, NS_20S); // Coinbase ticker 更新慢
     // 计算加权价格
     const auto &wps_bn_usdcusdt =
         calculate_weighted_price(bn_data, &depth_bn_usdcusdt, &fp_usdt);
@@ -912,8 +913,8 @@ void FairPriceGenerator::calculate_fp_usdc() {
   }
 
   // USDC 锚定检测: 利用 Circle 1:1 赎回机制做安全校验
-  static constexpr double kUsdcWarnBps = 2.0;
-  static constexpr double kUsdcHardBps = 10.0;
+  static constexpr double kUsdcWarnBps = 10.0;   // 低于此值不告警
+  static constexpr double kUsdcHardBps = 10.0;   // Circle 1:1 赎回安全边界
   double mid = (fp[0] + fp[1]) * 0.5;
   double dev_bp = std::abs(mid - 1.0) * 10000.0;
   if (dev_bp > kUsdcHardBps) [[unlikely]] {
@@ -1081,7 +1082,7 @@ void FairPriceGenerator::calculate_fp_digital(const data::currency &currency) {
   const bool ok_valid =
       is_external_data_valid(bbo_ok_Cusdt, depth_ok_Cusdt, this->ts_tmp, NS_5S);
   const bool cb_valid =
-      is_external_data_valid(bbo_cb_Cusd, depth_cb_Cusd, this->ts_tmp, NS_5S);
+      is_external_data_valid(bbo_cb_Cusd, depth_cb_Cusd, this->ts_tmp, NS_20S); // Coinbase ticker
 
   // 根据有效性计算 wp，如果无效则返回 invalid_array
   const auto wp_bn_Cusdt_bbo_tmp =

@@ -1,10 +1,10 @@
 #include "nvws/ws_websocket_client.h"
-#include <pthread.h>
 #include "base/base_base64.h"
 #include "base/base_hash.h"
 #include "base/base_os_socket.h"
 #include "base/base_os_thread.h"
 #include "nvws/ws_thread_pool.h"
+#include <pthread.h>
 
 #include <cerrno>
 #include <cstdio>
@@ -44,7 +44,8 @@ public:
         io_stop_(false), proxy_port_(0) {
     // 读取代理设置
     const char *proxy_env = getenv("https_proxy");
-    if (!proxy_env) proxy_env = getenv("HTTPS_PROXY");
+    if (!proxy_env)
+      proxy_env = getenv("HTTPS_PROXY");
     if (proxy_env) {
       auto proxy_url = std::string(proxy_env);
       auto scheme_end = proxy_url.find("://");
@@ -103,7 +104,8 @@ public:
         pthread_setaffinity_np(pthread_self(), sizeof(cpuset), &cpuset);
       }
       // 连接
-      if (!ProcessConnect()) return;
+      if (!ProcessConnect())
+        return;
       // 接收循环: SSL_read 为阻塞模式, 有数据时立即处理, 无数据时阻塞等待
       while (state_ == WS_STATE_OPEN && !io_stop_) {
         ProcessReceive();
@@ -118,13 +120,19 @@ public:
     state_ = WS_STATE_CLOSING;
     io_stop_ = true;
 
-    CloseConnection();
+    // 先关闭 socket 以中断 IO 线程的阻塞 SSL_read，避免 SSL_free 竞态条件
+    if (sockfd_ >= 0) {
+      shutdown(sockfd_, SHUT_RDWR);
+    }
 
     if (io_thread_ && io_thread_->joinable()) {
       io_thread_->join();
       delete io_thread_;
       io_thread_ = nullptr;
     }
+
+    // IO 线程已退出，安全清理 SSL 资源
+    CloseConnection();
 
     state_ = WS_STATE_CLOSED;
   }
@@ -327,12 +335,13 @@ private:
       }
 
       auto target = host_ + ":" + std::to_string(port_);
-      std::string req = "CONNECT " + target + " HTTP/1.1\r\nHost: " + target +
-                        "\r\n\r\n";
+      std::string req =
+          "CONNECT " + target + " HTTP/1.1\r\nHost: " + target + "\r\n\r\n";
       if (send(sockfd_, req.c_str(), req.size(), 0) <= 0) {
         WS_ERROR_INFO err;
         err.Set(WS_ERR, "Failed to send CONNECT to proxy");
-        if (spi_) spi_->OnFail(err);
+        if (spi_)
+          spi_->OnFail(err);
         close(sockfd_);
         sockfd_ = -1;
         state_ = WS_STATE_CLOSED;
@@ -344,7 +353,8 @@ private:
       if (n <= 0) {
         WS_ERROR_INFO err;
         err.Set(WS_ERR, "No response from proxy");
-        if (spi_) spi_->OnFail(err);
+        if (spi_)
+          spi_->OnFail(err);
         close(sockfd_);
         sockfd_ = -1;
         state_ = WS_STATE_CLOSED;
@@ -356,9 +366,9 @@ private:
         WS_ERROR_INFO err;
         // 找第一行作为错误
         auto nl = resp.find('\r');
-        err.Set(WS_ERR, "Proxy CONNECT failed: %s",
-                resp.substr(0, nl).c_str());
-        if (spi_) spi_->OnFail(err);
+        err.Set(WS_ERR, "Proxy CONNECT failed: %s", resp.substr(0, nl).c_str());
+        if (spi_)
+          spi_->OnFail(err);
         close(sockfd_);
         sockfd_ = -1;
         state_ = WS_STATE_CLOSED;

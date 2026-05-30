@@ -305,8 +305,8 @@ MapChannels(const std::string &exchange,
       else if (ch == "trade") out.push_back("trades");
       else out.push_back(ch);
     } else if (exchange == "coinbase" || exchange == "cb") {
-      if (ch == "bbo") out.push_back("ticker");       // ticker 推送 BBO (level2 需认证)
-      else if (ch == "depth") out.push_back("level2"); // 需要认证
+      if (ch == "bbo") out.push_back("ticker");       // ticker 推送 BBO
+      else if (ch == "depth") out.push_back("level2"); // 实时订单簿 (已公开, 无需认证)
       else if (ch == "trade") out.push_back("matches"); // Exchange WS: matches 推送逐笔成交
       else out.push_back(ch);
     } else if (exchange == "gateio" || exchange == "gt") {
