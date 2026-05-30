@@ -219,7 +219,7 @@ void TakingDemo::on_datainfo(const DataInfoManager *datainfo, int32_t di,
   // if (CFG_.Strategy.Verbose.ob)
   //   DEBUG_FLOG("[VerboseOb] on_datainfo di={} qtype={}", di, quote_type);
   // if (quote_type == NOVA_COIN_QUOTE_TRADE && ) {
-  bool fetch_ok = DataProcess::fetch_data(one, InstData_, scheduler_.flag_data_ready, CFG_);
+  bool fetch_ok = DataProcess::fetch_data(one, InstData_, scheduler_.flag_data_ready, CFG_, &scheduler_.pair_push_cnt_);
   if (fetch_ok)
     scheduler_.flag_data_ready = true; // 一旦就绪，绝不回退
   // 更新 global_ts
@@ -268,6 +268,7 @@ void TakingDemo::on_datainfo(const DataInfoManager *datainfo, int32_t di,
 
 void TakingDemo::on_reminder(void *, uint64_t cur_ns) {
   scheduler_.log_turnover_rate(static_cast<int64_t>(cur_ns));
+  scheduler_.log_pair_frequency(static_cast<int64_t>(cur_ns));
   do_calculations(static_cast<int64_t>(cur_ns));
   AddReminder(cur_ns + 10'000'000, nullptr); // 10ms 后再次触发
 }

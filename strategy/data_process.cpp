@@ -52,7 +52,8 @@ std::string format_main_exchange_cross_pair(const std::string &base_currency,
 
 bool fetch_data(const nova::quote::DataInfo &one,
                 data::InstrumentData &InstData_, bool &flag_data_ready,
-                const Configs &CFG_) {
+                const Configs &CFG_,
+                std::unordered_map<std::string, int64_t> *pair_push_cnt) {
   const auto &quote_type = one.quote_type();
   auto &id_map = InstData_.IM.inststr2id_;
   std::string inst_str;
@@ -117,8 +118,11 @@ bool fetch_data(const nova::quote::DataInfo &one,
                  data.side == NOVA_SIDE_BUY ? "BUY" : "SELL", data.price,
                  data.qty);
     // turnover-only inst 没有 depth/bbo, 跳过后续更新，但 trade 数据已记录
-    if (!InstData_.depth_map.count(id) && !InstData_.bbo_map.count(id))
+    if (!InstData_.depth_map.count(id) && !InstData_.bbo_map.count(id)) {
+      if (pair_push_cnt)
+        (*pair_push_cnt)[inst_str]++;
       return flag_data_ready ? true : false;
+    }
     if (InstData_.depth_map.count(id) && InstData_.bbo_map.count(id)) {
       auto &depth_map = InstData_.depth_map[id];
       auto &bbo_map = InstData_.bbo_map[id];
@@ -127,6 +131,9 @@ bool fetch_data(const nova::quote::DataInfo &one,
   } else {
     throw std::invalid_argument("invalid quote type!");
   }
+  // 每 pair 推送计数
+  if (pair_push_cnt)
+    (*pair_push_cnt)[inst_str]++;
   auto &id = id_map.at(inst_str);
   if (quote_type == NOVA_COIN_QUOTE_DEPTH ||
       quote_type == NOVA_COIN_QUOTE_DEPTH_LVN)

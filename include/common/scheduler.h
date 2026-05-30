@@ -1,8 +1,12 @@
 #pragma once
 
 #include "base/base_async_log.h"
+#include <algorithm>
 #include <atomic>
 #include <cstdint>
+#include <string>
+#include <unordered_map>
+#include <vector>
 
 namespace nova {
 struct ModuleScheduler {
@@ -26,6 +30,38 @@ struct ModuleScheduler {
   double acc_usd_order = 0.0;
   int acc_bbo_cnt = 0;            // BBO 更新累积计数
 
+  // 每 N 秒输出一次各 pair 推送频率 (调用方负责传入 current_ts_ns)
+  inline void log_pair_frequency(int64_t now_ns, int64_t interval_ns = 30'000'000'000LL) {
+    if (last_freq_log_ts_ == 0) {
+      last_freq_log_ts_ = now_ns;
+      return;
+    }
+    int64_t elapsed = now_ns - last_freq_log_ts_;
+    if (elapsed < interval_ns)
+      return;
+    if (pair_push_cnt_.empty())
+      return;
+
+    // 按推送次数降序排列
+    std::vector<std::pair<std::string, int64_t>> sorted(
+        pair_push_cnt_.begin(), pair_push_cnt_.end());
+    std::sort(sorted.begin(), sorted.end(),
+              [](const auto &a, const auto &b) { return a.second > b.second; });
+
+    double elapsed_s = static_cast<double>(elapsed) / 1e9;
+    fmt::memory_buffer buf;
+    fmt::format_to(std::back_inserter(buf), "[PairFreq] {:.0f}s interval:\n", elapsed_s);
+    for (const auto &[inst, cnt] : sorted) {
+      double freq = static_cast<double>(cnt) / elapsed_s;
+      fmt::format_to(std::back_inserter(buf), "  {} cnt={} freq={:.1f}/s\n", inst, cnt, freq);
+    }
+    INFO_FLOG("{}", fmt::to_string(buf));
+
+    // 重置计数器
+    pair_push_cnt_.clear();
+    last_freq_log_ts_ = now_ns;
+  }
+
   // ===== turnover 速率统计 (不被 mark_* reset) =====
   double acc_turnover_total = 0.0;
   double prev_turnover_total = 0.0;
@@ -39,6 +75,10 @@ struct ModuleScheduler {
   int64_t last_aim_data_ts_ = 0;     // aim exchange 最近数据到达时间, 0=未初始化
   std::atomic<int> new_data_count_{0}; // on_datainfo 计数, on_poll 消费
   bool flag_new_data = false;          // on_datainfo 设置, mark_fp 清除
+
+  // ===== 每 pair 推送频率统计 =====
+  std::unordered_map<std::string, int64_t> pair_push_cnt_;
+  int64_t last_freq_log_ts_ = 0;
 
   inline void init(double negative_interval_ms, double fp_turnover_usd_,
                    double order_turnover_usd_,

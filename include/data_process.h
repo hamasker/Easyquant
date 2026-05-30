@@ -38,7 +38,8 @@ std::string format_main_exchange_cross_pair(const std::string &base_currency,
 // 数据获取和处理函数
 bool fetch_data(const nova::quote::DataInfo &one,
                 data::InstrumentData &InstData_, bool &flag_data_ready,
-                const Configs &CFG_);
+                const Configs &CFG_,
+                std::unordered_map<std::string, int64_t> *pair_push_cnt = nullptr);
 
 void fetch_data_all(const DataInfoManager *datainfo,
                     data::InstrumentData &InstData_, const Configs &CFG_);
