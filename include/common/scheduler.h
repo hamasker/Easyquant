@@ -76,6 +76,7 @@ struct ModuleScheduler {
   bool disconnect_flag = false;
   int64_t last_aim_data_ts_ = 0;     // aim exchange 最近数据到达时间, 0=未初始化
   std::atomic<int> new_data_count_{0}; // on_datainfo 计数, on_poll 消费
+  std::atomic<int> new_trade_count_{0}; // on_datainfo trade 计数, on_poll 消费
   bool flag_new_data = false;          // on_datainfo 设置, mark_fp 清除
 
   // ===== 每 pair 推送频率统计 =====

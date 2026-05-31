@@ -51,6 +51,7 @@ out = {
         }
     },
     "channel": mcp_server,
+    "model": cfg.get("model") or manifest.get("defaultModel") or "",
     "settings": cfg.get("settings") or "",
     "prompts": manifest.get("sharedPrompts", []) + [cfg["systemPrompt"]],
 }
@@ -63,6 +64,7 @@ fi
 
 MCP=$(python3 -c "import json,sys; print(json.dumps(json.loads(sys.argv[1])['mcp'], separators=(',', ':')))" "$CFG_JSON")
 CHANNEL=$(python3 -c "import json,sys; print(json.loads(sys.argv[1])['channel'])" "$CFG_JSON")
+MODEL=$(python3 -c "import json,sys; print(json.loads(sys.argv[1])['model'])" "$CFG_JSON")
 SETTINGS=$(python3 -c "import json,sys; print(json.loads(sys.argv[1])['settings'])" "$CFG_JSON")
 mapfile -t PROMPTS < <(python3 -c "import json,sys; print('\n'.join(json.loads(sys.argv[1])['prompts']))" "$CFG_JSON")
 
@@ -79,6 +81,7 @@ ARGS=(
   --dangerously-load-development-channels "server:${CHANNEL}"
 )
 [[ -n "$SETTINGS" && -f "$SETTINGS" ]] && ARGS+=(--settings "$SETTINGS")
+[[ -n "$MODEL" ]] && ARGS+=(--model "$MODEL")
 for p in "${PROMPTS[@]}"; do
   [[ -n "$p" && -f "$p" ]] && ARGS+=(--append-system-prompt-file "$p")
 done

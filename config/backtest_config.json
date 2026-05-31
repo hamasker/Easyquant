@@ -40,7 +40,7 @@
     "Quote": {
         "backtest": {
             "begin_time": "20260320.00:00:00",
-            "end_time": "20260320.00:10:00",
+            "end_time": "20260320.10:10:00",
             "input_dirs": [
                 {
                     "path": "/data/bin/",

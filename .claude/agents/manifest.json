@@ -1,4 +1,5 @@
 {
+  "defaultModel": "opus",
   "sharedPrompts": [
     ".claude/agents/wechat-reply.md"
   ],

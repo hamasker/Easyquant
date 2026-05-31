@@ -12,6 +12,7 @@ constexpr int DepNum10 = 10;
 constexpr int64_t NS_5S = 5LL * 1000000000LL;   // 5 * 1e9 ns
 constexpr int64_t NS_20S = 20LL * 1000000000LL; // 20 * 1e9 ns
 constexpr int64_t NS_30S = 30LL * 1000000000LL; // 30 * 1e9 ns
+constexpr int64_t NS_60S = 60LL * 1000000000LL; // 60 * 1e9 ns
 
 // 定义无效数组常量
 constexpr std::array<double, 2> invalid_array = {-1.0, -1.0};
@@ -863,7 +864,7 @@ void FairPriceGenerator::calculate_fp_usdc() {
       data::bbo_data(), depth_aim_usdceur, this->ts_tmp, NS_30S);
 
   // 检查 AIM 数据有效性
-  if (!is_depth_valid(depth_aim_usdcusd, this->ts_tmp, NS_30S) ||
+  if (!is_depth_valid(depth_aim_usdcusd, this->ts_tmp, NS_60S) ||
       !is_depth_valid(depth_aim_usdceur, this->ts_tmp, NS_30S) ||
       !is_depth_valid(depth_aim_eurusd, this->ts_tmp, NS_30S)) {
     ERROR_FLOG(

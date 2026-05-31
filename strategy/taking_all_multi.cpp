@@ -66,7 +66,6 @@ bool TakingDemo::on_init(const Config *cfg) {
   for (const auto &inst_str : CFG_.Strategy.Stable.instruments) {
     subscribe_instruments(inst_str, true);
   }
-
   // ── turnover 订阅: 先收策略标的, 再补 top-N 缺口 ──
   // 1. 策略已订阅的 spot (含 trade 频道)
   for (auto &item : InstData_.trade_map) {
@@ -76,7 +75,6 @@ bool TakingDemo::on_init(const Config *cfg) {
     else
       turnover_pairs_.add_id(item.first);
   }
-
   // 2. top-N 中未订阅的补上 (只订 trade), 带重试
   //    仅在 mock/prod 模式下生效, backtest 跳过 (数据不包含 TopN pairs)
   if (!CFG_.Strategy.backtest) {
@@ -84,7 +82,8 @@ bool TakingDemo::on_init(const Config *cfg) {
     std::vector<std::string> top_pairs;
     for (int attempt = 0; attempt < kMaxRetries; ++attempt) {
       if (attempt > 0) {
-        WARNING_FLOG("[OnInit] turnover fetch retry #{}, waiting 2s...", attempt);
+        WARNING_FLOG("[OnInit] turnover fetch retry #{}, waiting 2s...",
+                     attempt);
         std::this_thread::sleep_for(std::chrono::seconds(2));
       }
       top_pairs.clear();
@@ -256,6 +255,7 @@ void TakingDemo::on_datainfo(const DataInfoManager *datainfo, int32_t di,
       //           trade->price * trade->qty); // todo: 转换到USD
       scheduler_.add_turnover(trade->price * trade->qty);
     }
+    ++scheduler_.new_trade_count_;
   }
   if (scheduler_.flag_first) {
     INFO_FLOG("[OnStrategy]trigger on_datainfo success {}",
@@ -286,8 +286,13 @@ void TakingDemo::on_reminder(void *, uint64_t cur_ns) {
 }
 
 void TakingDemo::on_poll(int64_t ts) {
-  if (scheduler_.new_data_count_ > 0) {
-    scheduler_.new_data_count_ = 0;
+  // 仅 trade 驱动 do_calculations (turnover 变化时才检查
+  // should_fp/should_order) BBO/depth 更新 InstData_ 但不改变谓词, 跳过节省
+  // ~90% 开销
+  bool has_trade = scheduler_.new_trade_count_ > 0;
+  scheduler_.new_data_count_ = 0;
+  scheduler_.new_trade_count_ = 0;
+  if (has_trade) {
     do_calculations(ts);
   }
 }
@@ -329,9 +334,12 @@ void TakingDemo::do_calculations(int64_t current_ts) {
 
 void TakingDemo::process_print(int64_t ts) {
   time_t t = static_cast<time_t>(ts / 1'000'000'000LL);
-  std::string time_str =
-      time_util::FormatTime(t, "%Y%m%d.%H:%M:%S", time_util::TimeZone::CST);
-  INFO_FLOG("[Print] global_ts={} ({})", ts, time_str);
+  int64_t micros = (ts % 1'000'000'000LL) / 1'000;
+  std::string time_str = fmt::format(
+      "{}.{:06d}",
+      time_util::FormatTime(t, "%Y%m%d.%H:%M:%S", time_util::TimeZone::CST),
+      micros);
+  INFO_FLOG("************************ {} ************************", time_str);
 }
 
 void TakingDemo::process_disconnect(int64_t /*ts*/) {
@@ -420,25 +428,21 @@ void TakingDemo::process_order(int64_t ts) {
     auto *IC = InstData_.IM.FindByUniId(id);
     if (!IC || !IC->flag_trading)
       continue;
-
     auto dd_it = InstData_.depth_map.find(id);
     if (dd_it == InstData_.depth_map.end())
       continue;
     const auto &dd = dd_it->second;
     if (!dd.valid || ts - dd.local_ts > kStaleNs)
       continue;
-
     auto vol_it = InstData_.vol_map.find(id);
     if (vol_it != InstData_.vol_map.end()) {
       if (std::isfinite(vol_it->second.abs_s_bps) &&
           vol_it->second.abs_s_bps > 50.0)
         continue;
     }
-
     double mid = 0.5 * (dd.bids[0][0] + dd.asks[0][0]);
     if (mid <= 0)
       continue;
-
     double tick = (dd.tick_size > 0) ? dd.tick_size : 1e-5;
     double base_qty = kOrderUsd / mid;
     double qty_prec =
