@@ -30,7 +30,24 @@ book increment(b/a)  → apply(qty=0删, qty>0更新) → 合成全档 → dispa
 ## MmapBacktestFeed — 二进制回测
 
 格式: `[type:1B][ts:8B][inst_id:28B][depth:170B | trade:25B]`
-mmap 零拷贝, 1000条/批读取。149MB 0.17s 跑完。
+mmap 零拷贝。k-way merge 多文件归并，按时间戳排序 dispatch。
+
+### batch=1 逐条 dispatch
+
+`Poll()` 每次 dispatch **1 条** record（非原来的 1000 条），随后主循环立即 `on_poll` → `do_calculations`。使得 turnover 逐步累积，FP 触发行为接近 mock/prod 模式。
+
+### 时间过滤
+
+配置 `begin_time` / `end_time` 格式: `"YYYYMMDD.HH:mm:ss"`（UTC）。
+- `begin_time` 之前: 逐条 skip
+- `end_time` 之后: 整文件标记耗尽（文件内时间戳单调递增），O(1) 跳过
+
+### speed_ 速度控制
+
+- `speed_ = 0`: 不模拟 wall-clock 时序，CPU 全速跑。`on_reminder` 基本不触发。
+- `speed_ > 0`: 按倍数模拟实时速度。`speed_=1` = 实时，`speed_=10` = 10x 快放。
+
+回测中 schedule 谓词使用数据时间戳 (`global_ts`)，非 wall-clock。数据密度高时 `speed_=0` 影响极小。
 
 Python 转换器: `python/convert_parquet_to_bin.py <exchange> <symbol> <date>`
 

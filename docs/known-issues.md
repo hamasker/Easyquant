@@ -2,9 +2,18 @@
 
 ## USDT FP stale depth (已修复)
 
-`calculate_fp_usdt` 需 5 个 Kraken depth pair 全部新鲜（5s 内）。Kraken v2 book handler 原要求 `!bids.empty() && !asks.empty()` 才 dispatch DepthLVN，交叉对（usdt_eur, usdc_usdt 等）orderbook 薄，某侧长期为空 → DepthLVN 永不 dispatch → `depth_map.local_ts` 永久为 0 → 5 对全 stale。
+`calculate_fp_usdt` 需 5 个 Kraken depth pair 全部新鲜（20s 内）。Kraken v2 book handler 原要求 `!bids.empty() && !asks.empty()` 才 dispatch DepthLVN，交叉对（usdt_eur, usdc_usdt 等）orderbook 薄，某侧长期为空 → DepthLVN 永不 dispatch → `depth_map.local_ts` 永久为 0 → 5 对全 stale。
 
 **修复** (`ws_feed.cpp:656`): `&&` → `||`，单侧有数据即 dispatch。
+
+## USDT FP 按通路 stale 降级 (已优化)
+
+Kraken USDC/USDT 市场极薄，depth 更新间隔常超过 20s。旧逻辑任意 depth pair stale → 全盘 `AIM_EXCH_INVALID` → FP 放弃。
+
+**优化** (`fair_price_generator.cpp`): 按通路判断：
+- 单通路 stale → warn + 自动降级（如 USDC 通路 stale，用 Direct+EUR 双通路）
+- 三通路全 stale → ERROR + `AIM_EXCH_INVALID`
+- `check_path_consistency` 支持 1/2 条通路
 
 ## FP 启动时空 buffer 崩溃 (已修复)
 
