@@ -392,7 +392,7 @@ void TakingDemo::process_negative(int64_t ts) {
 
 void TakingDemo::process_fp(int64_t ts) { fpg_->update(ts); }
 
-// ─── 下单: OB档位漂移表 ───
+// ─── 下单: OB档位漂移表 + TailFillModel EFU ───
 namespace {
 double default_half_spread_bps(data::currency base) {
   switch (base) {
@@ -423,6 +423,7 @@ void TakingDemo::process_order(int64_t ts) {
   constexpr double kOrderUsd = 50.0;
   constexpr int kMaxOrdersPerSide = 3;
   constexpr double kMinPnlBps = 0.5;
+  constexpr double kFillHorizonSec = 60.0; // 与 drift tau 一致
 
   for (auto &id : InstData_.trading_ids) {
     auto *IC = InstData_.IM.FindByUniId(id);
@@ -451,6 +452,11 @@ void TakingDemo::process_order(int64_t ts) {
     if (base_qty <= 0)
       continue;
 
+    // ── 构建 TailFillModel (从 prob_params CSV) ──
+    data::TailFillModel fill_model_ask(IC->prob_params_sell);
+    data::TailFillModel fill_model_bid(IC->prob_params_buy);
+    bool use_efu = !fill_model_ask.pp.empty() || !fill_model_bid.pp.empty();
+
     // 撤已有订单 (仅当价格变动超过 1 tick 时才撤, 减少订单流失)
     auto om_it = InstData_.order_map.find(id);
     double prev_best_bid = 0.0, prev_best_ask = 0.0;
@@ -476,6 +482,7 @@ void TakingDemo::process_order(int64_t ts) {
       double pnl;
       double price;
       double fills;
+      double efu; // expected fill USD in kFillHorizonSec
     };
     std::vector<Candidate> ask_cands, bid_cands;
 
@@ -485,12 +492,41 @@ void TakingDemo::process_order(int64_t ts) {
       return (it != drift_tables_.end()) ? &it->second : nullptr;
     }();
 
+    // ── 非 USD quote → 取 quote/USD 汇率 ──
+    double quote_usd_rate = 1.0; // quote="USD" 时保持不变
+    if (IC->quote_str != "usd") {
+      std::string usd_pair_str = IC->quote_str + "_usd";
+      // 尝试从 InstData_ 找 quote/USD pair 的 mid
+      for (auto &kv : InstData_.depth_map) {
+        auto *ic2 = InstData_.IM.FindByUniId(kv.first);
+        if (ic2 && ic2->base_str == IC->quote_str && ic2->quote_str == "usd") {
+          const auto &dd2 = kv.second;
+          if (dd2.valid && dd2.bids[0][0] > 0 && dd2.asks[0][0] > 0)
+            quote_usd_rate = 0.5 * (dd2.bids[0][0] + dd2.asks[0][0]);
+          break;
+        }
+      }
+    }
+
+    // 预计算每档累计 USD depth
+    double cum_ask_usd[25] = {}, cum_bid_usd[25] = {};
+    double cum_a = 0.0, cum_b = 0.0;
+    for (int lv = 0; lv < 25; ++lv) {
+      cum_ask_usd[lv] = cum_a * quote_usd_rate;
+      cum_bid_usd[lv] = cum_b * quote_usd_rate;
+      if (dd.asks[lv][0] > mid && dd.asks[lv][1] > 0)
+        cum_a += dd.asks[lv][0] * dd.asks[lv][1];
+      if (dd.bids[lv][0] > 0 && dd.bids[lv][1] > 0)
+        cum_b += dd.bids[lv][0] * dd.bids[lv][1];
+    }
+
     for (int lv = 0; lv < 25; ++lv) {
       // ASK
       double ask_p = dd.asks[lv][0];
       if (ask_p > mid && ask_p < mid * 1.1) {
         double pnl = default_half_spread_bps(IC->base);
         double fills = 1.0;
+        double efu = 0.0;
         if (dt && !dt->empty()) {
           auto *entry = dt->lookup(1, lv, 60.0);
           if (entry) {
@@ -498,14 +534,21 @@ void TakingDemo::process_order(int64_t ts) {
             fills = entry->fills_per_day;
           }
         }
+        // TailFillModel EFU: 取代 fills_per_day
+        if (use_efu && !fill_model_ask.pp.empty())
+          efu = fill_model_ask.expected_fill_usd(cum_ask_usd[lv], kOrderUsd,
+                                                  mid, kFillHorizonSec);
+        else
+          efu = fills; // fallback: 用 DriftTable fills
         if (pnl > kMinPnlBps)
-          ask_cands.push_back({lv, pnl, ask_p, fills});
+          ask_cands.push_back({lv, pnl, ask_p, fills, efu});
       }
       // BID
       double bid_p = dd.bids[lv][0];
       if (bid_p > 0 && bid_p < mid) {
         double pnl = default_half_spread_bps(IC->base);
         double fills = 1.0;
+        double efu = 0.0;
         if (dt && !dt->empty()) {
           auto *entry = dt->lookup(0, lv, 60.0);
           if (entry) {
@@ -513,16 +556,30 @@ void TakingDemo::process_order(int64_t ts) {
             fills = entry->fills_per_day;
           }
         }
+        if (use_efu && !fill_model_bid.pp.empty())
+          efu = fill_model_bid.expected_fill_usd(cum_bid_usd[lv], kOrderUsd,
+                                                  mid, kFillHorizonSec);
+        else
+          efu = fills;
         if (pnl > kMinPnlBps)
-          bid_cands.push_back({lv, pnl, bid_p, fills});
+          bid_cands.push_back({lv, pnl, bid_p, fills, efu});
       }
     }
 
-    auto rank = [](const Candidate &a, const Candidate &b) {
-      return a.pnl * a.fills > b.pnl * b.fills;
-    };
-    std::sort(ask_cands.begin(), ask_cands.end(), rank);
-    std::sort(bid_cands.begin(), bid_cands.end(), rank);
+    // 排序: EFU 可用时用 pnl×EFU, 否则 fallback 到 pnl×fills
+    if (use_efu) {
+      auto rank_efu = [](const Candidate &a, const Candidate &b) {
+        return a.pnl * a.efu > b.pnl * b.efu;
+      };
+      std::sort(ask_cands.begin(), ask_cands.end(), rank_efu);
+      std::sort(bid_cands.begin(), bid_cands.end(), rank_efu);
+    } else {
+      auto rank_fills = [](const Candidate &a, const Candidate &b) {
+        return a.pnl * a.fills > b.pnl * b.fills;
+      };
+      std::sort(ask_cands.begin(), ask_cands.end(), rank_fills);
+      std::sort(bid_cands.begin(), bid_cands.end(), rank_fills);
+    }
 
     int n_ask = std::min(kMaxOrdersPerSide, (int)ask_cands.size());
     int n_bid = std::min(kMaxOrdersPerSide, (int)bid_cands.size());
