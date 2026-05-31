@@ -48,6 +48,8 @@ int main(int argc, char **argv) {
     return 1;
   }
   runner.Run();
+  // 回测/高日志量：先停异步写线程，避免进程退出时 g_queue 积压
+  nova::log::StopAsync();
   INFO_FLOG("[Main] Shutdown complete");
   return 0;
 }

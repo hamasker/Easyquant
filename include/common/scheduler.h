@@ -17,6 +17,7 @@ struct ModuleScheduler {
   int64_t order_interval_min_ns = 0;
   int64_t order_interval_max_ns = 0;
   int64_t disconnect_retry_ns = static_cast<int64_t>(1e9);
+  int64_t print_interval_ns = 0;
   double fp_turnover_usd = 0.0;
   double order_turnover_usd = 0.0;
   int fp_bbo_trigger_cnt = 50;    // BBO 累积次数触发阈值
@@ -26,6 +27,7 @@ struct ModuleScheduler {
   int64_t last_negative_ts = 0;
   int64_t last_fp_ts = 0;
   int64_t last_order_ts = 0;
+  int64_t last_print_ts = 0;
   double acc_usd_fp = 0.0;
   double acc_usd_order = 0.0;
   int acc_bbo_cnt = 0;            // BBO 更新累积计数
@@ -84,15 +86,17 @@ struct ModuleScheduler {
                    double order_turnover_usd_,
                    double fp_interval_min_ms, double fp_interval_max_ms,
                    double order_interval_min_ms, double order_interval_max_ms,
+                   double print_interval_s,
                    int64_t now_ts) {
     negative_interval_ns = static_cast<int64_t>(negative_interval_ms * 1e6);
     fp_interval_min_ns = static_cast<int64_t>(fp_interval_min_ms * 1e6);
     fp_interval_max_ns = static_cast<int64_t>(fp_interval_max_ms * 1e6);
     order_interval_min_ns = static_cast<int64_t>(order_interval_min_ms * 1e6);
     order_interval_max_ns = static_cast<int64_t>(order_interval_max_ms * 1e6);
+    print_interval_ns = static_cast<int64_t>(print_interval_s * 1e9);
     fp_turnover_usd = fp_turnover_usd_;
     order_turnover_usd = order_turnover_usd_;
-    last_disconnect_ts = last_negative_ts = last_fp_ts = last_order_ts = now_ts;
+    last_disconnect_ts = last_negative_ts = last_fp_ts = last_order_ts = last_print_ts = now_ts;
   }
 
   inline void add_turnover(double usd) {
@@ -141,6 +145,10 @@ struct ModuleScheduler {
     return ts - last_negative_ts > negative_interval_ns;
   }
 
+  inline bool should_print(int64_t ts) const {
+    return print_interval_ns > 0 && ts - last_print_ts > print_interval_ns;
+  }
+
   inline bool should_fp(int64_t ts) const {
     return (acc_usd_fp >= fp_turnover_usd &&
             ts - last_fp_ts > fp_interval_min_ns) ||
@@ -158,6 +166,7 @@ struct ModuleScheduler {
     disconnect_flag = false;
   }
   inline void mark_negative(int64_t ts) { last_negative_ts = ts; }
+  inline void mark_print(int64_t ts) { last_print_ts = ts; }
   inline void mark_fp(int64_t ts) {
     last_fp_ts = ts;
     acc_usd_fp = 0.0;

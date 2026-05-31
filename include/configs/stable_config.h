@@ -21,6 +21,7 @@
   X(fp_interval_max_ms, double, 200.0)                                         \
   X(order_interval_min_ms, double, 1000.0)                                     \
   X(order_interval_max_ms, double, 3500.0)                                     \
+  X(print_interval, double, 1.0)                                               \
   X(vol_interval, double, 50.0)                                                \
   X(reconnect_threshold, double, 30.0)                                         \
   X(bn_taker_fee, double, 0.000129375)                                         \

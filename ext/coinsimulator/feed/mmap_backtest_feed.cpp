@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstring>
+#include <ctime>
 #include <dirent.h>
 #include <fcntl.h>
 #include <sys/mman.h>
@@ -26,6 +27,30 @@ int64_t NowNs() {
   return std::chrono::duration_cast<std::chrono::nanoseconds>(
              std::chrono::system_clock::now().time_since_epoch())
       .count();
+}
+
+// 将 "YYYYMMDD.HH:mm:ss" 字符串转为 UTC epoch 纳秒
+// 例: "20260320.00:00:00" → 2026-03-20 00:00:00 UTC → ns since epoch
+int64_t parse_time_str_ns(const std::string &s) {
+  if (s.size() < 17) return 0;
+  int year, month, day, hour, min, sec;
+  if (sscanf(s.c_str(), "%4d%2d%2d.%2d:%2d:%2d",
+             &year, &month, &day, &hour, &min, &sec) != 6)
+    return 0;
+
+  struct tm tm_val = {};
+  tm_val.tm_year = year - 1900;
+  tm_val.tm_mon = month - 1;
+  tm_val.tm_mday = day;
+  tm_val.tm_hour = hour;
+  tm_val.tm_min = min;
+  tm_val.tm_sec = sec;
+  tm_val.tm_isdst = 0;
+
+  // timegm: 将 struct tm 按 UTC 解释，返回 epoch 秒 (GNU extension)
+  time_t epoch_s = timegm(&tm_val);
+  if (epoch_s == static_cast<time_t>(-1)) return 0;
+  return static_cast<int64_t>(epoch_s) * 1'000'000'000LL;
 }
 
 // Binary record: type(1B) + ts_ns(8B) + inst_id(28B) + data(...)
@@ -149,22 +174,14 @@ bool MmapBacktestFeed::Initialize(const nova::base::Config &cfg) {
   cfg.GetItemValue("Quote.backtest.end_time", end_str);
 
   if (!begin_str.empty()) {
-    std::string ts = begin_str;
-    ts.erase(std::remove(ts.begin(), ts.end(), '.'), ts.end());
-    ts.erase(std::remove(ts.begin(), ts.end(), ':'), ts.end());
-    if (ts.size() >= 8) {
-      try { begin_ns_ = std::stoll(ts + std::string(19 - ts.size(), '0')); }
-      catch (...) { begin_ns_ = 0; }
-    }
+    begin_ns_ = parse_time_str_ns(begin_str);
+    if (begin_ns_ > 0)
+      INFO_FLOG("[MmapFeed] begin_time: {} → {} ns (epoch)", begin_str, begin_ns_);
   }
   if (!end_str.empty()) {
-    std::string ts = end_str;
-    ts.erase(std::remove(ts.begin(), ts.end(), '.'), ts.end());
-    ts.erase(std::remove(ts.begin(), ts.end(), ':'), ts.end());
-    if (ts.size() >= 8) {
-      try { end_ns_ = std::stoll(ts + std::string(19 - ts.size(), '9')); }
-      catch (...) { end_ns_ = 0; }
-    }
+    end_ns_ = parse_time_str_ns(end_str);
+    if (end_ns_ > 0)
+      INFO_FLOG("[MmapFeed] end_time: {} → {} ns (epoch)", end_str, end_ns_);
   }
 
   if (data_root_.empty()) {
@@ -183,30 +200,33 @@ bool MmapBacktestFeed::Initialize(const nova::base::Config &cfg) {
 }
 
 const char *MmapBacktestFeed::next_record() {
-  // 找到 active files 中时间戳最小的
-  int best = -1;
-  int64_t best_ts = INT64_MAX;
+  while (true) {
+    // 找到 active files 中时间戳最小的
+    int best = -1;
+    int64_t best_ts = INT64_MAX;
 
-  for (size_t i = 0; i < readers_.size(); ++i) {
-    if (readers_[i].next_ts < best_ts) {
-      best_ts = readers_[i].next_ts;
-      best = static_cast<int>(i);
+    for (size_t i = 0; i < readers_.size(); ++i) {
+      if (readers_[i].next_ts < best_ts) {
+        best_ts = readers_[i].next_ts;
+        best = static_cast<int>(i);
+      }
     }
-  }
 
-  if (best < 0 || best_ts == INT64_MAX) return nullptr;
+    if (best < 0 || best_ts == INT64_MAX) return nullptr;
 
-  // 时间过滤
-  if (begin_ns_ > 0 && best_ts < begin_ns_) {
-    readers_[best].advance();
-    if (readers_[best].next_ts == INT64_MAX) --active_count_;
-    return next_record(); // 递归跳过
-  }
-  if (end_ns_ > 0 && best_ts > end_ns_) {
-    readers_[best].advance();
-    if (readers_[best].next_ts == INT64_MAX) --active_count_;
-    return next_record();
-  }
+    // 时间过滤 (用循环代替递归，防止大量连续越界记录导致栈溢出)
+    if (begin_ns_ > 0 && best_ts < begin_ns_) {
+      readers_[best].advance();
+      if (readers_[best].next_ts == INT64_MAX) --active_count_;
+      continue;
+    }
+    if (end_ns_ > 0 && best_ts > end_ns_) {
+      // 文件内 record 时间戳单调递增, 当前 best_ts > end_ns_
+      // 意味着该文件后续所有 record 均越界, 直接整文件标记耗尽
+      readers_[best].next_ts = INT64_MAX;
+      --active_count_;
+      continue;
+    }
 
   // 速度控制
   if (speed_ > 0) {
@@ -234,6 +254,7 @@ const char *MmapBacktestFeed::next_record() {
   if (r.next_ts == INT64_MAX) --active_count_;
 
   return rec;
+  }
 }
 
 bool MmapBacktestFeed::Poll() {
@@ -243,12 +264,10 @@ bool MmapBacktestFeed::Poll() {
     return false;
   }
 
-  int batch = 0;
-  const char *rec;
-  while (batch < 1000 && (rec = next_record()) != nullptr) {
-    dispatch_record(rec);
-    ++batch;
-  }
+  // batch=1: 每条 record dispatch 后主循环立即 on_poll → do_calculations,
+  // 使 turnover 逐步累积，FP 触发行为接近 mock 模式
+  const char *rec = next_record();
+  if (rec) dispatch_record(rec);
 
   return active_count_ > 0;
 }

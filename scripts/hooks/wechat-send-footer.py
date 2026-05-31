@@ -40,6 +40,7 @@ def main() -> None:
         json.dumps(
             {
                 "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
                     "permissionDecision": "allow",
                     "updatedInput": updated,
                 }

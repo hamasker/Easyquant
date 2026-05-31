@@ -39,8 +39,8 @@
     },
     "Quote": {
         "backtest": {
-            "begin_time": "1773964800",
-            "end_time": "1774051200",
+            "begin_time": "20260320.00:00:00",
+            "end_time": "20260320.00:10:00",
             "input_dirs": [
                 {
                     "path": "/data/bin/",
@@ -67,9 +67,12 @@
     },
     "Strategy": {
         "path": "/home/baser/Working/MX/Easyquant/lib/libTakingDemo.so",
+        "backtest": true,
         "Base": {
             "root_dir": "/home/baser/Working/MX/Easyquant/",
-            "limit_usd": 100.0
+            "limit_usd": 100.0,
+            "fp_turnover_usd": 1200.0,
+            "order_turnover_usd": 21000.0
         },
         "Order": {
             "holding_time_s": 60.0
@@ -94,10 +97,10 @@
         },
         "Verbose": {
             "order": true,
-            "fp": true,
-            "ob": true,
-            "cuscore": true,
-            "tfi": true
+            "fp": false,
+            "ob": false,
+            "cuscore": false,
+            "tfi": false
         },
         "Factor": {
             "auto_code": "ChENyuRoNg_f48631acbf3cd9c12f82",

@@ -60,27 +60,27 @@ Result compute_fp_bidask_3ex2src(const Quote2 &aim,
 
   // ===== 保留你原来的 params 打印（不删）=====
   if (verbose) {
-    INFO_FLOG("[FP] params tau_age_ms={} inv_tau_ns={} kappa_m={} beta_s={} "
-              "s_min_bps={} s_max_bps={} g_cap_bps={} k_mad={} eps={} "
-              "ex_w=[{},{},{}] src_u=[{},{}]",
-              p.tau_age_ms, inv_tau_ns, p.kappa_m, p.beta_s, p.s_min_bps,
-              p.s_max_bps, p.g_cap_bps, p.k_mad, p.eps, p.ex_w[0], p.ex_w[1],
-              p.ex_w[2], p.src_u[0], p.src_u[1]);
+    DEBUG_FLOG("[FP] params tau_age_ms={} inv_tau_ns={} kappa_m={} beta_s={} "
+               "s_min_bps={} s_max_bps={} g_cap_bps={} k_mad={} eps={} "
+               "ex_w=[{},{},{}] src_u=[{},{}]",
+               p.tau_age_ms, inv_tau_ns, p.kappa_m, p.beta_s, p.s_min_bps,
+               p.s_max_bps, p.g_cap_bps, p.k_mad, p.eps, p.ex_w[0], p.ex_w[1],
+               p.ex_w[2], p.src_u[0], p.src_u[1]);
     // 额外：打印 rho/gamma（新增，不影响你原打印）
-    INFO_FLOG("[FP] ret params rho_z={} gamma_z={} alpha_m={} alpha_var={} "
-              "alpha_base={} var_init_bps={}",
-              p.rho_z, p.gamma_z, p.alpha_m, p.alpha_var, p.alpha_base,
-              p.var_init_bps);
+    DEBUG_FLOG("[FP] ret params rho_z={} gamma_z={} alpha_m={} alpha_var={} "
+               "alpha_base={} var_init_bps={}",
+               p.rho_z, p.gamma_z, p.alpha_m, p.alpha_var, p.alpha_base,
+               p.var_init_bps);
     // 额外：打印 anti-windup 参数（新增）
-    INFO_FLOG("[FP] anti params g_gate_bps={} g_reset_bps={} z_clip_bps={}",
-              p.g_gate_bps, p.g_reset_bps, p.z_clip_bps);
+    DEBUG_FLOG("[FP] anti params g_gate_bps={} g_reset_bps={} z_clip_bps={}",
+               p.g_gate_bps, p.g_reset_bps, p.z_clip_bps);
     // 额外：打印 leak（新增，不影响你原打印）
-    INFO_FLOG("[FP] leak param band_leak={}", p.band_leak);
+    DEBUG_FLOG("[FP] leak param band_leak={}", p.band_leak);
   }
 
   if (!aim.ok || !wp_ok(aim.px)) {
     if (verbose)
-      INFO_FLOG(
+      DEBUG_FLOG(
           "[FP] aim invalid ok={} wp_bid={} wp_ask={} local_ts={} age_ms={}",
           aim.ok, aim.px[0], aim.px[1], aim.local_ts,
           aim.local_ts ? ns_to_ms(now_ts - aim.local_ts) : -1.0);
@@ -102,15 +102,15 @@ Result compute_fp_bidask_3ex2src(const Quote2 &aim,
     state.prev_m_k = m_k;
   }
   if (verbose)
-    INFO_FLOG("[FP] aim ret r_aim={} prev_m_k={}", r_aim, state.prev_m_k);
+    DEBUG_FLOG("[FP] aim ret r_aim={} prev_m_k={}", r_aim, state.prev_m_k);
 
   // ===== 保留你原来的 aim 打印（不删）=====
   if (verbose)
-    INFO_FLOG("[FP] aim wp=[{},{}] local_ts={} age_ms={} m_k={} s_raw={} "
-              "s_clamp={} range_s=[{},{}]",
-              aim.px[0], aim.px[1], aim.local_ts,
-              ns_to_ms(now_ts - aim.local_ts), m_k, s_k_raw, s_k, s_min_log,
-              s_max_log);
+    DEBUG_FLOG("[FP] aim wp=[{},{}] local_ts={} age_ms={} m_k={} s_raw={} "
+               "s_clamp={} range_s=[{},{}]",
+               aim.px[0], aim.px[1], aim.local_ts,
+               ns_to_ms(now_ts - aim.local_ts), m_k, s_k_raw, s_k, s_min_log,
+               s_max_log);
 
   r.g_m = 0.0;
 
@@ -133,11 +133,11 @@ Result compute_fp_bidask_3ex2src(const Quote2 &aim,
         raw[j] = 0.0;
         r_ret[j] = 0.0;
         if (verbose)
-          INFO_FLOG("[FP] ch {}_{} j={} INVALID ok={} wp=[{},{}] local_ts={} "
-                    "age_ms={}",
-                    EX_NAME[ex], SRC_NAME[src], j, q.ok, q.px[0], q.px[1],
-                    q.local_ts,
-                    q.local_ts ? ns_to_ms(now_ts - q.local_ts) : -1.0);
+          DEBUG_FLOG("[FP] ch {}_{} j={} INVALID ok={} wp=[{},{}] local_ts={} "
+                     "age_ms={}",
+                     EX_NAME[ex], SRC_NAME[src], j, q.ok, q.px[0], q.px[1],
+                     q.local_ts,
+                     q.local_ts ? ns_to_ms(now_ts - q.local_ts) : -1.0);
         continue;
       }
 
@@ -153,9 +153,10 @@ Result compute_fp_bidask_3ex2src(const Quote2 &aim,
 
       // ====== return-only：更新 prev_m 得到 r_ret ======
       if (verbose)
-        INFO_FLOG("[FP] ch {}_{} j={} m={} prev_m={} r_ret=[{},{},{},{},{},{}]",
-                  EX_NAME[ex], SRC_NAME[src], j, m, state.ch[j].prev_m,
-                  r_ret[0], r_ret[1], r_ret[2], r_ret[3], r_ret[4], r_ret[5]);
+        DEBUG_FLOG(
+            "[FP] ch {}_{} j={} m={} prev_m={} r_ret=[{},{},{},{},{},{}]",
+            EX_NAME[ex], SRC_NAME[src], j, m, state.ch[j].prev_m, r_ret[0],
+            r_ret[1], r_ret[2], r_ret[3], r_ret[4], r_ret[5]);
 
       auto &st = state.ch[j];
       if (!st.has_prev_m) {
@@ -197,18 +198,19 @@ Result compute_fp_bidask_3ex2src(const Quote2 &aim,
 
       // ======= 保留你原来的打印（不删） =======
       if (verbose) {
-        INFO_FLOG("[FP] ch {}_{} j={} wp=[{},{}] local_ts={} age_ms={} m={} "
-                  "g_raw={} g_clamp={} cap_g={} s_raw={} s_clamp={} w_age={} "
-                  "w_qual={} src_u={} raw={}",
-                  EX_NAME[ex], SRC_NAME[src], j, q.px[0], q.px[1], q.local_ts,
-                  ns_to_ms(now_ts - q.local_ts), m, g_raw, g[j], g_cap_log,
-                  s_raw, s[j], w_age[j], w_qual[j], p.src_u[src], raw[j]);
-        INFO_FLOG("[FP] ch {}_{} j={} noise ema_m={} err={} var={} var_base={} "
-                  "ratio={} w_qual={}",
-                  EX_NAME[ex], SRC_NAME[src], j, st.ema_m, err, st.var,
-                  st.var_base, ratio, w_qual[j]);
-        INFO_FLOG("[FP] ch {}_{} j={} ret r={} prev_m={}", EX_NAME[ex],
-                  SRC_NAME[src], j, r_ret[j], st.prev_m);
+        DEBUG_FLOG("[FP] ch {}_{} j={} wp=[{},{}] local_ts={} age_ms={} m={} "
+                   "g_raw={} g_clamp={} cap_g={} s_raw={} s_clamp={} w_age={} "
+                   "w_qual={} src_u={} raw={}",
+                   EX_NAME[ex], SRC_NAME[src], j, q.px[0], q.px[1], q.local_ts,
+                   ns_to_ms(now_ts - q.local_ts), m, g_raw, g[j], g_cap_log,
+                   s_raw, s[j], w_age[j], w_qual[j], p.src_u[src], raw[j]);
+        DEBUG_FLOG(
+            "[FP] ch {}_{} j={} noise ema_m={} err={} var={} var_base={} "
+            "ratio={} w_qual={}",
+            EX_NAME[ex], SRC_NAME[src], j, st.ema_m, err, st.var, st.var_base,
+            ratio, w_qual[j]);
+        DEBUG_FLOG("[FP] ch {}_{} j={} ret r={} prev_m={}", EX_NAME[ex],
+                   SRC_NAME[src], j, r_ret[j], st.prev_m);
       }
     }
   }
@@ -223,10 +225,10 @@ Result compute_fp_bidask_3ex2src(const Quote2 &aim,
     }
 
     if (verbose)
-      INFO_FLOG("[FP] robust pre n_valid={} raw=[{},{},{},{},{},{}] "
-                "g=[{},{},{},{},{},{}]",
-                n, raw[0], raw[1], raw[2], raw[3], raw[4], raw[5], g[0], g[1],
-                g[2], g[3], g[4], g[5]);
+      DEBUG_FLOG("[FP] robust pre n_valid={} raw=[{},{},{},{},{},{}] "
+                 "g=[{},{},{},{},{},{}]",
+                 n, raw[0], raw[1], raw[2], raw[3], raw[4], raw[5], g[0], g[1],
+                 g[2], g[3], g[4], g[5]);
 
     if (n >= 3) {
       double tmp_med[6];
@@ -242,14 +244,14 @@ Result compute_fp_bidask_3ex2src(const Quote2 &aim,
       const double thr = p.k_mad * (mad + p.eps);
 
       if (verbose)
-        INFO_FLOG("[FP] robust stat med={} mad={} thr={} (k_mad={})", med, mad,
-                  thr, p.k_mad);
+        DEBUG_FLOG("[FP] robust stat med={} mad={} thr={} (k_mad={})", med, mad,
+                   thr, p.k_mad);
 
       for (int i = 0; i < 6; ++i) {
         if (raw[i] > 0.0 && std::abs(g[i] - med) > thr) {
           if (verbose)
-            INFO_FLOG("[FP] robust DROP i={} g={} |g-med|={} raw={} -> 0", i,
-                      g[i], std::abs(g[i] - med), raw[i]);
+            DEBUG_FLOG("[FP] robust DROP i={} g={} |g-med|={} raw={} -> 0", i,
+                       g[i], std::abs(g[i] - med), raw[i]);
           raw[i] = 0.0;
           r_ret[i] = 0.0;
         }
@@ -258,8 +260,8 @@ Result compute_fp_bidask_3ex2src(const Quote2 &aim,
   }
 
   if (verbose)
-    INFO_FLOG("[FP] robust post raw=[{},{},{},{},{},{}]", raw[0], raw[1],
-              raw[2], raw[3], raw[4], raw[5]);
+    DEBUG_FLOG("[FP] robust post raw=[{},{},{},{},{},{}]", raw[0], raw[1],
+               raw[2], raw[3], raw[4], raw[5]);
 
   // ===== 分层归一 =====
   double wsum = 0.0;
@@ -269,8 +271,8 @@ Result compute_fp_bidask_3ex2src(const Quote2 &aim,
     const double sum_ex = raw[j0] + raw[j1];
 
     if (verbose)
-      INFO_FLOG("[FP] ex {} sum_ex={} raw_depth={} raw_bbo={} ex_w={}",
-                EX_NAME[ex], sum_ex, raw[j0], raw[j1], p.ex_w[ex]);
+      DEBUG_FLOG("[FP] ex {} sum_ex={} raw_depth={} raw_bbo={} ex_w={}",
+                 EX_NAME[ex], sum_ex, raw[j0], raw[j1], p.ex_w[ex]);
 
     if (sum_ex <= 0.0) {
       w[j0] = 0.0;
@@ -284,13 +286,13 @@ Result compute_fp_bidask_3ex2src(const Quote2 &aim,
     wsum += (w[j0] + w[j1]);
 
     if (verbose)
-      INFO_FLOG("[FP] ex {} w_pre depth={} bbo={} wsum_now={}", EX_NAME[ex],
-                w[j0], w[j1], wsum);
+      DEBUG_FLOG("[FP] ex {} w_pre depth={} bbo={} wsum_now={}", EX_NAME[ex],
+                 w[j0], w[j1], wsum);
   }
 
   if (wsum <= 0.0) {
     if (verbose)
-      INFO_FLOG("[FP] wsum<=0 fallback aim wp.");
+      DEBUG_FLOG("[FP] wsum<=0 fallback aim wp.");
     r.fp = aim.px;
     r.ok = true;
     return r;
@@ -300,8 +302,8 @@ Result compute_fp_bidask_3ex2src(const Quote2 &aim,
     w[i] /= wsum;
 
   if (verbose)
-    INFO_FLOG("[FP] w_norm=[{},{},{},{},{},{}] (wsum_before_norm={})", w[0],
-              w[1], w[2], w[3], w[4], w[5], wsum);
+    DEBUG_FLOG("[FP] w_norm=[{},{},{},{},{},{}] (wsum_before_norm={})", w[0],
+               w[1], w[2], w[3], w[4], w[5], wsum);
 
   // ===== 1) 融合 gap =====
   double g_m = 0.0;
@@ -332,8 +334,10 @@ Result compute_fp_bidask_3ex2src(const Quote2 &aim,
   }
 
   auto to_bps = [](double x) { return x * 1e4; }; // log -> bps
-  INFO_FLOG("[FP] gate_dbg |g_m|={}bps b={}bps x={}bps g_gate={}bps gate_x={}",
-            to_bps(std::abs(g_m)), to_bps(b), to_bps(x), p.g_gate_bps, gate_x);
+  if (verbose)
+    DEBUG_FLOG(
+        "[FP] gate_dbg |g_m|={}bps b={}bps x={}bps g_gate={}bps gate_x={}",
+        to_bps(std::abs(g_m)), to_bps(b), to_bps(x), p.g_gate_bps, gate_x);
 
   // z 更新门控
   const double gate_acc = (x > 0.0 ? 1.0 : 0.0); // 只要在 band 外就积累
@@ -369,26 +373,26 @@ Result compute_fp_bidask_3ex2src(const Quote2 &aim,
   const double m_fair = m_k + dm;
 
   if (verbose) {
-    INFO_FLOG("[FP] band fK={} fL={} c={} sK={} b={} g_m={} |g_m|={} x={} "
-              "g_gate={} gate_x={} d_eff={} leak={} dm_gap={}",
-              p.fK, p.fL, p.c, s_k, b, g_m, ad, x, p.g_gate_bps, gate_x, d_eff,
-              p.band_leak, dm_gap);
+    DEBUG_FLOG("[FP] band fK={} fL={} c={} sK={} b={} g_m={} |g_m|={} x={} "
+               "g_gate={} gate_x={} d_eff={} leak={} dm_gap={}",
+               p.fK, p.fL, p.c, s_k, b, g_m, ad, x, p.g_gate_bps, gate_x, d_eff,
+               p.band_leak, dm_gap);
   }
 
   // ===== 保留你原来的 mid_fuse 打印（不删）=====
   if (verbose) {
-    INFO_FLOG("r_lead: {}, z: {}, rho_z: {}, r_ret: [{},{},{},{},{},{}]",
-              r_lead, state.z, p.rho_z, r_ret[0], r_ret[1], r_ret[2], r_ret[3],
-              r_ret[4], r_ret[5]);
-    INFO_FLOG("kappa_m: {}, g_m: {}, gamma_z: {}, state.z: {}", p.kappa_m, g_m,
-              p.gamma_z, state.z);
-    INFO_FLOG(
+    DEBUG_FLOG("r_lead: {}, z: {}, rho_z: {}, r_ret: [{},{},{},{},{},{}]",
+               r_lead, state.z, p.rho_z, r_ret[0], r_ret[1], r_ret[2], r_ret[3],
+               r_ret[4], r_ret[5]);
+    DEBUG_FLOG("kappa_m: {}, g_m: {}, gamma_z: {}, state.z: {}", p.kappa_m, g_m,
+               p.gamma_z, state.z);
+    DEBUG_FLOG(
         "[FP] mid_fuse g=[{},{},{},{},{},{}] w=[{},{},{},{},{},{}] g_m={} "
         "dm={} m_fair={}",
         g[0], g[1], g[2], g[3], g[4], g[5], w[0], w[1], w[2], w[3], w[4], w[5],
         g_m, dm, m_fair);
 
-    INFO_FLOG(
+    DEBUG_FLOG(
         "[FP] ret_fuse r=[{},{},{},{},{},{}] r_lead={} r_aim={} z={} rho_z={} "
         "gate_x={} dm_gap={} dm_ret_raw={} dm_ret={} gamma_z={}",
         r_ret[0], r_ret[1], r_ret[2], r_ret[3], r_ret[4], r_ret[5], r_lead,
@@ -406,14 +410,14 @@ Result compute_fp_bidask_3ex2src(const Quote2 &aim,
                     s_max_log);
 
     if (verbose)
-      INFO_FLOG(
+      DEBUG_FLOG(
           "[FP] spread_fuse beta_s={} s_k={} s_lead_raw={} s_lead_clamp={} "
           "s_fair={}",
           p.beta_s, s_k, s_lead, s_lead_clamp, s_fair);
   } else {
     if (verbose)
-      INFO_FLOG("[FP] spread_fuse beta_s=0 use s_k={} -> s_fair={}", s_k,
-                s_fair);
+      DEBUG_FLOG("[FP] spread_fuse beta_s=0 use s_k={} -> s_fair={}", s_k,
+                 s_fair);
   }
 
   const double half_s = 0.5 * s_fair;
@@ -430,13 +434,13 @@ Result compute_fp_bidask_3ex2src(const Quote2 &aim,
   r.s = s;
 
   if (verbose)
-    INFO_FLOG("[FP] out fp_bid={} fp_ask={} aim_wp=[{},{}]", r.fp[0], r.fp[1],
-              aim.px[0], aim.px[1]);
+    DEBUG_FLOG("[FP] out fp_bid={} fp_ask={} aim_wp=[{},{}]", r.fp[0], r.fp[1],
+               aim.px[0], aim.px[1]);
 
   // ====== ONLINE EVAL (place near the end, before return) ======
   {
     // 是否打印在线评估（可以独立于 verbose）
-    const bool eval_verbose = true; // 你可以改成 CFG_ 开关或传参
+    const bool eval_verbose = false; // 你可以改成 CFG_ 开关或传参
 
     auto to_bps = [](double x) -> double { return x * 1e4; }; // log -> bps
 
@@ -485,27 +489,28 @@ Result compute_fp_bidask_3ex2src(const Quote2 &aim,
         (E.last_report_ts == 0 || now_ts - E.last_report_ts >= NS_1S)) {
       E.last_report_ts = now_ts;
 
-      INFO_FLOG("[FP][EVAL] cnt={} dev_bps_ema={} step_bps_ema={} gate_ema={} "
-                "xpos_ema={} overshoot_ema={} abs_z_bps_ema={}",
-                E.sample_cnt, E.ema_abs_dev_bps, E.ema_abs_step_bps, E.ema_gate,
-                E.ema_xpos, E.ema_overshoot, E.ema_abs_z_bps);
+      DEBUG_FLOG("[FP][EVAL] cnt={} dev_bps_ema={} step_bps_ema={} gate_ema={} "
+                 "xpos_ema={} overshoot_ema={} abs_z_bps_ema={}",
+                 E.sample_cnt, E.ema_abs_dev_bps, E.ema_abs_step_bps,
+                 E.ema_gate, E.ema_xpos, E.ema_overshoot, E.ema_abs_z_bps);
 
       // 简单建议（不自动改参数，只给提示）
       if (E.ema_abs_dev_bps < 0.2 && E.ema_xpos < 0.01) {
-        INFO_FLOG("[FP][SUGGEST] fp too close to aim. Try band_leak↑ (e.g. "
-                  "0.02->0.05) or reduce band (fK/fL) or use soft gate.");
+        DEBUG_FLOG("[FP][SUGGEST] fp too close to aim. Try band_leak↑ (e.g. "
+                   "0.02->0.05) or reduce band (fK/fL) or use soft gate.");
       }
       if (E.ema_abs_step_bps > 2.0) {
-        INFO_FLOG("[FP][SUGGEST] fp too jumpy. Try band_leak↓, gamma_z↓, or "
-                  "g_gate_bps↑ (slower gate).");
+        DEBUG_FLOG("[FP][SUGGEST] fp too jumpy. Try band_leak↓, gamma_z↓, or "
+                   "g_gate_bps↑ (slower gate).");
       }
       if (E.ema_overshoot > 0.05) {
-        INFO_FLOG("[FP][SUGGEST] overshoot risk. Try gamma_z↓, z_clip_bps↓, or "
-                  "g_reset_bps↑.");
+        DEBUG_FLOG(
+            "[FP][SUGGEST] overshoot risk. Try gamma_z↓, z_clip_bps↓, or "
+            "g_reset_bps↑.");
       }
       if (E.ema_abs_z_bps > 100.0) {
-        INFO_FLOG("[FP][SUGGEST] z too large. Consider z_clip_bps↓ or rho_z↓ "
-                  "or stronger gate/reset.");
+        DEBUG_FLOG("[FP][SUGGEST] z too large. Consider z_clip_bps↓ or rho_z↓ "
+                   "or stronger gate/reset.");
       }
     }
   }

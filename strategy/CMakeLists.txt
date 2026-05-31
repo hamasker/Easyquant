@@ -76,4 +76,7 @@ message(STATUS "TakingDemo include directories: ${INCLUDE_DIRS}")
 # 添加包含路径（使用 PUBLIC 以便其他包含 data.h 的目标也能找到这些头文件）
 target_include_directories(TakingDemo PUBLIC ${INCLUDE_DIRS})
 
+# 与 coinrunner 一致：轻量日志（直接写文件），避免 LoggerServer 析构时 LoopAll 排空卡死
+target_compile_definitions(TakingDemo PRIVATE FMT_HEADER_ONLY NOVA_BASE_DISABLE_LOGGER)
+
 NOVA_CMAKE_LEAVE()

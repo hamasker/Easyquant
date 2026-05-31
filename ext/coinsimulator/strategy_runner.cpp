@@ -22,6 +22,7 @@
 #include <chrono>
 #include <csignal>
 #include <cstdio>
+#include <unistd.h>
 #include <iostream>
 #include <set>
 #include <thread>
@@ -32,11 +33,18 @@ using namespace nova::base;
 namespace {
 
 StrategyRunner *g_runner = nullptr;
+volatile sig_atomic_t g_signal_count = 0;
 
 void SignalHandler(int sig) {
-  INFO_FLOG("[Runner] Received signal {}", sig);
+  ++g_signal_count;
   if (g_runner) {
     g_runner->Stop();
+  }
+  // 析构/日志中再按 Ctrl+C：直接退出（handler 内禁止 INFO_FLOG，可能死锁）
+  if (g_signal_count >= 2) {
+    const char msg[] = "[coinrunner] forced exit (signal)\n";
+    (void)!write(STDERR_FILENO, msg, sizeof(msg) - 1);
+    _exit(128 + sig);
   }
 }
 
@@ -623,7 +631,16 @@ void StrategyRunner::Run() {
     }
   }
 
-  INFO_LOG("[Runner] Main loop exited");
+  if (g_signal_count > 0) {
+    INFO_LOG("[Runner] Main loop exited (signal {})", static_cast<int>(g_signal_count));
+  } else {
+    INFO_LOG("[Runner] Main loop exited");
+  }
+
+  // 通知策略端收尾 (回测结束处理等)
+  if (strategy_) {
+    strategy_->on_stop();
+  }
 }
 
 void StrategyRunner::Stop() {

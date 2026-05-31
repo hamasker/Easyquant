@@ -35,9 +35,10 @@ public:
 
   void PrefetchTail() {}
 
-  const T *Pop() {}
+  const T *Pop() { return TryPop(); }
 
-  const T *TryPop() {}
+  // 桩实现：队列未接入时恒为空，避免析构 while(TryPop) 因 UB 死循环
+  const T *TryPop() { return nullptr; }
 
   void EndPop() {}
 

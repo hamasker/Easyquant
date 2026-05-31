@@ -54,6 +54,7 @@ public: // * 各类方法
   void do_calculations(int64_t current_ts);
   void process_disconnect(int64_t current_ts);
   void process_negative(int64_t current_ts);
+  void process_print(int64_t current_ts);
   void process_fp(int64_t current_ts);
   void process_order(int64_t current_ts);
 

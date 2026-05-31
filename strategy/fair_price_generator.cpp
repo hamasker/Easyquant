@@ -503,15 +503,43 @@ bool FairPriceGenerator::update(const int64_t ts) {
 
 // ─── 路径一致性检测 ───
 static constexpr double kConsistencyBps = 2.0;
+// 路径一致性检测: 输入 N 个有效 mid (NaN 表示路径不可用)
+// 返回 bitmask (bit0=direct, bit1=EUR, bit2=USDC) 标识通过的路径
 static int check_path_consistency(double d_mid, double e_mid, double u_mid) {
-  double sorted[] = {d_mid, e_mid, u_mid};
-  std::sort(sorted, sorted + 3);
-  double med = sorted[1]; // median 抗单路径偏离
+  double mids[] = {d_mid, e_mid, u_mid};
+
+  // 收集有效路径
+  double vals[3];
+  int idx[3];
+  int n = 0;
+  for (int i = 0; i < 3; ++i) {
+    if (std::isfinite(mids[i]) && mids[i] > 0) {
+      vals[n] = mids[i];
+      idx[n] = i;
+      ++n;
+    }
+  }
+
+  if (n == 0)
+    return 0;
+  // 单路径: 自动通过
+  if (n == 1)
+    return 1 << idx[0];
+  // 双路径: 检查一致性, 不一致时两条都保留 (无第三参考)
+  if (n == 2) {
+    double diff =
+        std::abs(vals[0] - vals[1]) / std::min(vals[0], vals[1]) * 10000.0;
+    if (diff <= kConsistencyBps)
+      return (1 << idx[0]) | (1 << idx[1]);
+    return (1 << idx[0]) | (1 << idx[1]); // 保留两条
+  }
+
+  // 三路径: 原逻辑 — median 抗单路径偏离
+  std::sort(vals, vals + 3);
+  double med = vals[1];
   int mask = 0;
   for (int i = 0; i < 3; ++i) {
-    double mids[] = {d_mid, e_mid, u_mid};
-    if (std::isfinite(mids[i]) && mids[i] > 0 &&
-        std::abs(mids[i] - med) / med * 10000.0 <= kConsistencyBps)
+    if (std::abs(mids[i] - med) / med * 10000.0 <= kConsistencyBps)
       mask |= (1 << i);
   }
   return mask;
@@ -536,16 +564,22 @@ void FairPriceGenerator::calculate_fp_usdt() {
   const auto &dct = depth_map.at(id_ct);
   const auto &dcu = depth_map.at(id_cu);
 
-  // 数据时效检查
+  // 数据时效检查 — 按通路判断, 允许部分通路 stale
   InstData_.abnormal_status = data::abnormal_status::NORMAL;
   auto stale = [&](const auto &d) {
     return !d.valid || ts_tmp - d.local_ts > NS_20S;
   };
   bool sd = stale(dtu), ste = stale(dte), seu = stale(deu), sct = stale(dct),
        scu = stale(dcu);
-  if (sd || ste || seu || sct || scu) [[unlikely]] {
-    WARNING_FLOG(
-        "abnormal usdt fp: stale dd={} dte={} deu={} dct={} dcu={} | "
+  // 三通路: direct(dtu), EUR(dte+deu), USDC(dct+dcu)
+  bool path_d_stale = sd;
+  bool path_e_stale = ste || seu;
+  bool path_u_stale = sct || scu;
+  int stale_cnt = path_d_stale + path_e_stale + path_u_stale;
+  if (stale_cnt == 3) [[unlikely]] {
+    ERROR_FLOG(
+        "abnormal usdt fp: all 3 paths stale dd={} dte={} deu={} dct={} dcu={} "
+        "| "
         "ages dtu={:.0f}ms dte={:.0f}ms deu={:.0f}ms dct={:.0f}ms dcu={:.0f}ms",
         sd, ste, seu, sct, scu, (ts_tmp - dtu.local_ts) / 1e6,
         (ts_tmp - dte.local_ts) / 1e6, (ts_tmp - deu.local_ts) / 1e6,
@@ -553,17 +587,32 @@ void FairPriceGenerator::calculate_fp_usdt() {
     InstData_.abnormal_status = data::abnormal_status::AIM_EXCH_INVALID;
     return;
   }
+  if (stale_cnt > 0 && CFG_.Strategy.Verbose.fp) [[unlikely]] {
+    WARNING_FLOG(
+        "abnormal usdt fp: {} path(s) stale d={} e={} u={} | "
+        "ages dtu={:.0f}ms dte={:.0f}ms deu={:.0f}ms dct={:.0f}ms dcu={:.0f}ms",
+        stale_cnt, path_d_stale, path_e_stale, path_u_stale,
+        (ts_tmp - dtu.local_ts) / 1e6, (ts_tmp - dte.local_ts) / 1e6,
+        (ts_tmp - deu.local_ts) / 1e6, (ts_tmp - dct.local_ts) / 1e6,
+        (ts_tmp - dcu.local_ts) / 1e6);
+    // 仅 warn, 不 return — 用剩余路径继续
+  }
 
-  // 2. 三路径独立 mid → 一致性检测
+  // 2. 通路 mid 计算 (stale 通路设为 NaN, 不参与一致性检测)
   auto mid = [](double b1, double a1, double b2, double a2, auto fn) {
     return (fn(b1, b2) + fn(a1, a2)) * 0.5;
   };
-  double d_mid = mid(dtu.bids[0][0], dtu.asks[0][0], 0, 0,
-                     [](double p, double) { return p; });
-  double e_mid = mid(dte.bids[0][0], dte.asks[0][0], deu.bids[0][0],
-                     deu.asks[0][0], [](double a, double b) { return a * b; });
-  double u_mid = mid(dct.bids[0][0], dct.asks[0][0], dcu.bids[0][0],
-                     dcu.asks[0][0], [](double a, double b) { return b / a; });
+  double d_mid = path_d_stale ? NAN
+                              : mid(dtu.bids[0][0], dtu.asks[0][0], 0, 0,
+                                    [](double p, double) { return p; });
+  double e_mid = path_e_stale ? NAN
+                              : mid(dte.bids[0][0], dte.asks[0][0],
+                                    deu.bids[0][0], deu.asks[0][0],
+                                    [](double a, double b) { return a * b; });
+  double u_mid = path_u_stale ? NAN
+                              : mid(dct.bids[0][0], dct.asks[0][0],
+                                    dcu.bids[0][0], dcu.asks[0][0],
+                                    [](double a, double b) { return b / a; });
 
   int mask = check_path_consistency(d_mid, e_mid, u_mid);
   if (mask == 0) [[unlikely]] {
@@ -1104,9 +1153,9 @@ void FairPriceGenerator::calculate_fp_digital(const data::currency &currency) {
           : invalid_array;
   const std::array<double, 2> wp_bbo_ok = {wp_ok_Cusdt_bbo_tmp[0] * fp_usdt[0],
                                            wp_ok_Cusdt_bbo_tmp[1] * fp_usdt[1]};
-  const auto wp_bbo_cb =
-      (cb_valid && bbo_cb_Cusd.valid)
-          ? calculate_weighted_price(bbo_cb_Cusd) : invalid_array;
+  const auto wp_bbo_cb = (cb_valid && bbo_cb_Cusd.valid)
+                             ? calculate_weighted_price(bbo_cb_Cusd)
+                             : invalid_array;
 
   const auto &relative_trading_ids =
       DataProcess::get_relative_trading_ids(InstData_, currency);
@@ -1259,9 +1308,9 @@ void FairPriceGenerator::calculate_fp_digital(const data::currency &currency) {
         }
       }
       if (CFG_.Strategy.Verbose.fp)
-        INFO_FLOG("[new]{} fp_bid: {}, fp_ask: {}, ob_bid: {}, ob_ask: {}, ",
-                  currency_str, fp_tmp[0], fp_tmp[1], depth_aim_Cusd.bids[0][0],
-                  depth_aim_Cusd.asks[0][0]);
+        DEBUG_FLOG("[new]{} fp_bid: {}, fp_ask: {}, ob_bid: {}, ob_ask: {}, ",
+                   currency_str, fp_tmp[0], fp_tmp[1],
+                   depth_aim_Cusd.bids[0][0], depth_aim_Cusd.asks[0][0]);
     }
   }
 }

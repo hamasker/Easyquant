@@ -78,42 +78,45 @@ bool TakingDemo::on_init(const Config *cfg) {
   }
 
   // 2. top-N 中未订阅的补上 (只订 trade), 带重试
-  constexpr int kMaxRetries = 5;
-  std::vector<std::string> top_pairs;
-  for (int attempt = 0; attempt < kMaxRetries; ++attempt) {
-    if (attempt > 0) {
-      WARNING_FLOG("[OnInit] turnover fetch retry #{}, waiting 2s...", attempt);
-      std::this_thread::sleep_for(std::chrono::seconds(2));
-    }
-    top_pairs.clear();
-    bool all_ok = true;
-    for (int i = 0; i < 4; ++i) {
-      auto pairs = fetch_top_pairs_for_exch(i, 20);
-      if (pairs.empty()) {
-        WARNING_FLOG("[OnInit] turnover {}: 0 pairs, will retry",
-                     kVolumeExchNames[i]);
-        all_ok = false;
-      } else {
-        top_pairs.insert(top_pairs.end(), pairs.begin(), pairs.end());
+  //    仅在 mock/prod 模式下生效, backtest 跳过 (数据不包含 TopN pairs)
+  if (!CFG_.Strategy.backtest) {
+    constexpr int kMaxRetries = 5;
+    std::vector<std::string> top_pairs;
+    for (int attempt = 0; attempt < kMaxRetries; ++attempt) {
+      if (attempt > 0) {
+        WARNING_FLOG("[OnInit] turnover fetch retry #{}, waiting 2s...", attempt);
+        std::this_thread::sleep_for(std::chrono::seconds(2));
       }
+      top_pairs.clear();
+      bool all_ok = true;
+      for (int i = 0; i < 4; ++i) {
+        auto pairs = fetch_top_pairs_for_exch(i, 20);
+        if (pairs.empty()) {
+          WARNING_FLOG("[OnInit] turnover {}: 0 pairs, will retry",
+                       kVolumeExchNames[i]);
+          all_ok = false;
+        } else {
+          top_pairs.insert(top_pairs.end(), pairs.begin(), pairs.end());
+        }
+      }
+      if (all_ok)
+        break;
     }
-    if (all_ok)
-      break;
-  }
-  INFO_FLOG("[OnInit] fetch_all_top_pairs({}): {}", top_pairs.size(),
-            sum_util::ToString(top_pairs));
-  for (auto &pair : turnover_pairs_.filter_new(top_pairs)) {
-    auto inst_id = InstrumentId::Create(pair);
-    if (!inst_id.Valid())
-      continue;
-    auto *base_info = GetBaseInfo(inst_id);
-    auto IC_tmp = data::InstrumentComponent{inst_id, base_info, ""};
-    InstData_.IM.Insert(IC_tmp);
-    auto *posi = CreateSecurityPosition(inst_id);
-    ChangePositionToSingleSide(posi);
-    InstData_.trade_map[IC_tmp.uni_id] = data::trades_data{};
-    subs.emplace_back(SubTopic{posi, NOVA_COIN_QUOTE_TRADE, true});
-    turnover_pairs_.add_id(IC_tmp.uni_id, pair);
+    INFO_FLOG("[OnInit] fetch_all_top_pairs({}): {}", top_pairs.size(),
+              sum_util::ToString(top_pairs));
+    for (auto &pair : turnover_pairs_.filter_new(top_pairs)) {
+      auto inst_id = InstrumentId::Create(pair);
+      if (!inst_id.Valid())
+        continue;
+      auto *base_info = GetBaseInfo(inst_id);
+      auto IC_tmp = data::InstrumentComponent{inst_id, base_info, ""};
+      InstData_.IM.Insert(IC_tmp);
+      auto *posi = CreateSecurityPosition(inst_id);
+      ChangePositionToSingleSide(posi);
+      InstData_.trade_map[IC_tmp.uni_id] = data::trades_data{};
+      subs.emplace_back(SubTopic{posi, NOVA_COIN_QUOTE_TRADE, true});
+      turnover_pairs_.add_id(IC_tmp.uni_id, pair);
+    }
   }
   INFO_FLOG("[OnInit] turnover {} subs: {}", turnover_pairs_.size(),
             sum_util::ToString(turnover_pairs_.subscribed_str));
@@ -189,6 +192,7 @@ bool TakingDemo::on_init(const Config *cfg) {
                   CFG_.Strategy.Stable.fp_interval_max_ms,
                   CFG_.Strategy.Stable.order_interval_min_ms,
                   CFG_.Strategy.Stable.order_interval_max_ms,
+                  CFG_.Strategy.Stable.print_interval,
                   static_cast<int64_t>(
                       std::chrono::duration_cast<std::chrono::nanoseconds>(
                           std::chrono::system_clock::now().time_since_epoch())
@@ -219,7 +223,9 @@ void TakingDemo::on_datainfo(const DataInfoManager *datainfo, int32_t di,
   // if (CFG_.Strategy.Verbose.ob)
   //   DEBUG_FLOG("[VerboseOb] on_datainfo di={} qtype={}", di, quote_type);
   // if (quote_type == NOVA_COIN_QUOTE_TRADE && ) {
-  bool fetch_ok = DataProcess::fetch_data(one, InstData_, scheduler_.flag_data_ready, CFG_, &scheduler_.pair_push_cnt_);
+  bool fetch_ok =
+      DataProcess::fetch_data(one, InstData_, scheduler_.flag_data_ready, CFG_,
+                              &scheduler_.pair_push_cnt_);
   if (fetch_ok)
     scheduler_.flag_data_ready = true; // 一旦就绪，绝不回退
   // 更新 global_ts
@@ -260,6 +266,7 @@ void TakingDemo::on_datainfo(const DataInfoManager *datainfo, int32_t di,
     scheduler_.last_order_ts = global_ts;
     scheduler_.last_negative_ts = global_ts;
     scheduler_.last_disconnect_ts = global_ts;
+    scheduler_.last_print_ts = global_ts;
     AddReminder(global_ts + 10'000'000, nullptr);
     // 在第一次数据触发时再次设置日志级别, 确保新创建的线程都使用统一级别
     if (!CFG_.Server.Log.file_level_real.empty() && config_reloader_) {
@@ -294,6 +301,10 @@ void TakingDemo::do_calculations(int64_t current_ts) {
     current_ts = global_ts;
   InstData_.global_ts = current_ts;
   // * 检测断连 (含 aim exchange 30s 无数据自动触发)
+  if (scheduler_.should_print(current_ts)) {
+    process_print(current_ts);
+    scheduler_.mark_print(current_ts);
+  }
   if (scheduler_.should_disconnect(current_ts)) {
     process_disconnect(current_ts);
     scheduler_.mark_disconnect(current_ts);
@@ -314,6 +325,13 @@ void TakingDemo::do_calculations(int64_t current_ts) {
     process_order(current_ts);
     scheduler_.mark_order(current_ts);
   }
+}
+
+void TakingDemo::process_print(int64_t ts) {
+  time_t t = static_cast<time_t>(ts / 1'000'000'000LL);
+  std::string time_str =
+      time_util::FormatTime(t, "%Y%m%d.%H:%M:%S", time_util::TimeZone::CST);
+  INFO_FLOG("[Print] global_ts={} ({})", ts, time_str);
 }
 
 void TakingDemo::process_disconnect(int64_t /*ts*/) {
